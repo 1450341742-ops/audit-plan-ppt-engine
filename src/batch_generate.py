@@ -6,6 +6,7 @@ from renderer import render_ppt
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = BASE_DIR / "output"
+DEFAULT_TEMPLATE = BASE_DIR / "assets" / "template.pptx"
 DEFAULT_OUTPUT.mkdir(exist_ok=True, parents=True)
 
 
@@ -14,13 +15,13 @@ def safe_stem(name: str) -> str:
     return "".join("_" if c in invalid else c for c in name).strip().strip(".") or "output"
 
 
-def render_one(excel_path: str | Path, output_dir: str | Path | None = None) -> Path:
+def render_one(excel_path: str | Path, output_dir: str | Path | None = None, template_path: str | Path | None = None) -> Path:
     excel_path = Path(excel_path)
     output_dir = Path(output_dir or DEFAULT_OUTPUT)
     output_dir.mkdir(parents=True, exist_ok=True)
     context = parse_excel(excel_path)
-    out = output_dir / f"{safe_stem(excel_path.stem)}-V8.1模板版.pptx"
-    render_ppt(context, out)
+    out = output_dir / f"{safe_stem(excel_path.stem)}-V8.2严格模板版.pptx"
+    render_ppt(context, out, template_path=Path(template_path or DEFAULT_TEMPLATE))
     return out
 
 
@@ -29,6 +30,7 @@ def main():
     ap.add_argument("--excel", type=str)
     ap.add_argument("--excel_dir", type=str)
     ap.add_argument("--output_dir", type=str, default=str(DEFAULT_OUTPUT))
+    ap.add_argument("--template", type=str, default=str(DEFAULT_TEMPLATE))
     args = ap.parse_args()
     files = []
     if args.excel:
@@ -40,7 +42,7 @@ def main():
     if not files:
         raise SystemExit("请提供 --excel 或 --excel_dir")
     for f in files:
-        out = render_one(f, args.output_dir)
+        out = render_one(f, args.output_dir, template_path=args.template)
         print(out)
 
 
