@@ -134,44 +134,57 @@ def _copy_rels_from_part(src_part, dest_part) -> dict[str, str]:
     return rel_map
 
 
-def _append_shape_xml(dest, shape, rel_map: dict[str, str]) -> None:
-    new_el = deepcopy(shape.element)
-    for el in new_el.iter():
+def _remap_relationship_ids(xml_el, rel_map: dict[str, str]) -> None:
+    for el in xml_el.iter():
         for attr, val in list(el.attrib.items()):
             if val in rel_map:
                 el.attrib[attr] = rel_map[val]
+
+
+def _append_shape_xml(dest, shape, rel_map: dict[str, str]) -> None:
+    new_el = deepcopy(shape.element)
+    _remap_relationship_ids(new_el, rel_map)
     dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
 
 
-def _copy_background_xml(src_obj, dest) -> None:
+def _copy_background_xml(src_obj, dest, rel_map: dict[str, str]) -> None:
+    """复制背景XML并重映射图片关系。
+
+    之前出现“无法显示该图片”，根因是背景图在母版/版式 bg 中引用了旧 rId，
+    复制 XML 后没有把 rId 映射到目标 slide 的关系 ID。
+    """
     try:
         src_bg = src_obj.element.cSld.bg
         if src_bg is not None:
+            bg = deepcopy(src_bg)
+            _remap_relationship_ids(bg, rel_map)
             dst_c_sld = dest.element.cSld
             old_bg = dst_c_sld.bg
             if old_bg is not None:
                 dst_c_sld.remove(old_bg)
-            dst_c_sld.insert(0, deepcopy(src_bg))
+            dst_c_sld.insert(0, bg)
     except Exception:
         pass
 
 
 def _copy_visual_base_from(source, dest) -> None:
-    """复制模板母版/版式中的视觉背景，但跳过标题/副标题占位符。"""
+    """使用空白版式，但手动复制母版/版式/页面视觉元素。
+
+    - 不直接继承 source.slide_layout，避免出现“单击此处编辑标题”的空白页；
+    - 复制背景、图片、Logo、蓝色横条、表格和边框；
+    - 跳过标题/副标题占位符；
+    - 对背景图和图片关系 rId 做重映射，避免 PowerPoint 显示“无法显示该图片”。
+    """
     copied_ids = set()
     for src_obj in [getattr(source, "slide_master", None), getattr(source, "slide_layout", None), source]:
         if src_obj is None:
             continue
-        try:
-            _copy_background_xml(src_obj, dest)
-        except Exception:
-            pass
         rel_map = _copy_rels_from_part(src_obj.part, dest.part)
+        _copy_background_xml(src_obj, dest, rel_map)
         for shape in src_obj.shapes:
             try:
                 if _shape_is_template_placeholder_text(shape):
                     continue
-                # 版式/母版中的普通文本大多是占位说明，避免复制成空白页正文。
                 if src_obj is not source and getattr(shape, "has_text_frame", False):
                     continue
                 key = shape.element.xml
@@ -184,11 +197,6 @@ def _copy_visual_base_from(source, dest) -> None:
 
 
 def _copy_slide(prs: Presentation, src_no: int):
-    """严格模板跨平台复制。
-
-    使用空白版式生成目标页，避免母版占位符显示；再手动复制母版/版式/页面中的视觉元素。
-    这样既保留模板背景，又不会生成“单击此处编辑标题”的空白页。
-    """
     source = prs.slides[src_no - 1]
     dest = prs.slides.add_slide(_blank_layout(prs))
     for shp in list(dest.shapes):
