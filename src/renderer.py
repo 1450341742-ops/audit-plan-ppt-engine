@@ -83,6 +83,13 @@ def _delete_slide(prs: Presentation, index: int = 0) -> None:
     del prs.slides._sldIdLst[index]
 
 
+def _blank_layout(prs: Presentation):
+    try:
+        return prs.slide_layouts[6]
+    except Exception:
+        return prs.slide_layouts[0]
+
+
 def _remove_shape_xml(shape) -> None:
     try:
         shape.element.getparent().remove(shape.element)
@@ -134,20 +141,35 @@ def _remap_relationship_ids(xml_el, rel_map: dict[str, str]) -> None:
                 el.attrib[attr] = rel_map[val]
 
 
-def _copy_slide(prs: Presentation, src_no: int):
-    """复制模板页。
+def _copy_slide_background(source, dest, rel_map: dict[str, str]) -> None:
+    try:
+        src_bg = source.element.cSld.bg
+        if src_bg is not None:
+            bg = deepcopy(src_bg)
+            _remap_relationship_ids(bg, rel_map)
+            dst_c_sld = dest.element.cSld
+            old_bg = dst_c_sld.bg
+            if old_bg is not None:
+                dst_c_sld.remove(old_bg)
+            dst_c_sld.insert(0, bg)
+    except Exception:
+        pass
 
-    重要：必须使用 source.slide_layout，这样 PPT 会保留模板母版背景、Logo、蓝色横条等样式。
-    之前改为空白版式会丢失背景，导致白底；本版恢复为源版式，并删除自动占位符。
+
+def _copy_slide(prs: Presentation, src_no: int):
+    """严格复制模板页，但不继承母版占位符。
+
+    本模板的蓝色听诊器背景、Logo、蓝色横条、表格边框都在“当前页 shapes”中，
+    不是必须依赖版式占位符。因此这里使用空白版式 + 复制源页全部 shape，
+    避免正文中再次出现“单击此处编辑标题/副标题”的空白页。
     """
     source = prs.slides[src_no - 1]
-    dest = prs.slides.add_slide(source.slide_layout)
-
-    # 删除 add_slide 自动生成的标题/副标题占位符；母版背景与版式背景仍保留。
+    dest = prs.slides.add_slide(_blank_layout(prs))
     for shp in list(dest.shapes):
         _remove_shape_xml(shp)
 
     rel_map = _copy_rels(source, dest)
+    _copy_slide_background(source, dest, rel_map)
     for shape in source.shapes:
         try:
             if _shape_is_auto_placeholder(shape):
