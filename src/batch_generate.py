@@ -10,8 +10,8 @@ DEFAULT_OUTPUT.mkdir(exist_ok=True, parents=True)
 
 
 def safe_stem(name: str) -> str:
-    invalid_chars = set(':"/\\|?*')
-    return "".join("_" if c in invalid_chars else c for c in name).strip().strip(".") or "output"
+    invalid = '<>:"/\\|?*'
+    return "".join("_" if c in invalid else c for c in name).strip().strip(".") or "output"
 
 
 def render_one(excel_path: str | Path, output_dir: str | Path | None = None) -> Path:
@@ -19,7 +19,7 @@ def render_one(excel_path: str | Path, output_dir: str | Path | None = None) -> 
     output_dir = Path(output_dir or DEFAULT_OUTPUT)
     output_dir.mkdir(parents=True, exist_ok=True)
     context = parse_excel(excel_path)
-    out = output_dir / f"{safe_stem(excel_path.stem)}-V8通用版.pptx"
+    out = output_dir / f"{safe_stem(excel_path.stem)}-V7原生模板版.pptx"
     render_ppt(context, out)
     return out
 
