@@ -67,6 +67,13 @@ def _delete_slide(prs: Presentation, index: int = 0) -> None:
     del prs.slides._sldIdLst[index]
 
 
+def _blank_layout(prs: Presentation):
+    try:
+        return prs.slide_layouts[6]
+    except Exception:
+        return prs.slide_layouts[0]
+
+
 def _remove_shape_xml(shape) -> None:
     try:
         shape.element.getparent().remove(shape.element)
@@ -99,19 +106,19 @@ def _is_placeholder_text(text: str) -> bool:
 
 
 def _shape_is_auto_placeholder(shape) -> bool:
-    return getattr(shape, "has_text_frame", False) and _shape_is_placeholder(shape) and _is_placeholder_text(_text(shape))
+    return _shape_is_placeholder(shape) or _is_placeholder_text(_text(shape))
 
 
-def _copy_rels(source, dest) -> dict[str, str]:
+def _copy_rels(src_part, dest_part) -> dict[str, str]:
     rel_map = {}
-    for r_id, rel in source.part.rels.items():
-        if "slideLayout" in rel.reltype:
+    for r_id, rel in src_part.rels.items():
+        if "slideLayout" in rel.reltype or "slideMaster" in rel.reltype or "theme" in rel.reltype:
             continue
         try:
             if rel.is_external:
-                new_rid = dest.part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+                new_rid = dest_part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
             else:
-                new_rid = dest.part.rels.get_or_add(rel.reltype, rel._target)
+                new_rid = dest_part.rels.get_or_add(rel.reltype, rel._target)
             rel_map[r_id] = new_rid
         except Exception:
             pass
@@ -125,21 +132,26 @@ def _remap_relationship_ids(xml_el, rel_map: dict[str, str]) -> None:
                 el.attrib[attr] = rel_map[val]
 
 
-def _copy_slide(prs: Presentation, src_no: int):
-    """复制模板页并严格保留该页版式背景。
+def _copy_background(src_obj, dest, rel_map: dict[str, str]) -> None:
+    try:
+        bg = src_obj.element.cSld.bg
+        if bg is None:
+            return
+        new_bg = deepcopy(bg)
+        _remap_relationship_ids(new_bg, rel_map)
+        dst = dest.element.cSld
+        old = dst.bg
+        if old is not None:
+            dst.remove(old)
+        dst.insert(0, new_bg)
+    except Exception:
+        pass
 
-    关键修复：
-    1. 使用 source.slide_layout，保留模板母版/版式里的背景和Logo；
-    2. 删除 add_slide 自动生成的标题/副标题占位符；
-    3. 只复制源页自身 shapes，跳过“单击此处编辑标题/副标题”；
-    4. 不再把 10-21 的空模板页全部生成，只使用实际有表格的模板页生成问题页。
-    """
-    source = prs.slides[src_no - 1]
-    dest = prs.slides.add_slide(source.slide_layout)
-    for shp in list(dest.shapes):
-        _remove_shape_xml(shp)
-    rel_map = _copy_rels(source, dest)
-    for shape in source.shapes:
+
+def _copy_shapes_from(src_obj, dest) -> None:
+    rel_map = _copy_rels(src_obj.part, dest.part)
+    _copy_background(src_obj, dest, rel_map)
+    for shape in src_obj.shapes:
         try:
             if _shape_is_auto_placeholder(shape):
                 continue
@@ -148,6 +160,23 @@ def _copy_slide(prs: Presentation, src_no: int):
             dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
         except Exception:
             pass
+
+
+def _copy_slide(prs: Presentation, src_no: int):
+    """复制模板页：空白版式 + 母版视觉元素 + 版式视觉元素 + 当前页元素。"""
+    source = prs.slides[src_no - 1]
+    dest = prs.slides.add_slide(_blank_layout(prs))
+    for shp in list(dest.shapes):
+        _remove_shape_xml(shp)
+    try:
+        _copy_shapes_from(source.slide_layout.slide_master, dest)
+    except Exception:
+        pass
+    try:
+        _copy_shapes_from(source.slide_layout, dest)
+    except Exception:
+        pass
+    _copy_shapes_from(source, dest)
     return dest
 
 
@@ -165,11 +194,6 @@ def _slide_text(slide) -> str:
 
 
 def _find_issue_template_slide(prs: Presentation) -> int:
-    """自动寻找真正的问题页模板，避免复制空白占位页。
-
-    之前正文大量空白页，是因为按 10、11、12... 逐分类复制时，部分模板页只是“单击此处编辑标题”的占位页。
-    现在从 10-21 页中优先找带表格或含“依据/描述/问题分类”的页面，统一作为问题明细页模板。
-    """
     candidates = []
     for no in range(10, min(21, len(prs.slides)) + 1):
         slide = prs.slides[no - 1]
@@ -177,7 +201,7 @@ def _find_issue_template_slide(prs: Presentation) -> int:
         has_issue_words = any(k in text for k in ["依据", "描述", "问题分类"])
         has_table = bool(_tables(slide))
         if has_table or has_issue_words:
-            score = (10 if has_table else 0) + (5 if has_issue_words else 0) - (3 if _is_placeholder_text(text) else 0)
+            score = (10 if has_table else 0) + (5 if has_issue_words else 0) - (5 if _is_placeholder_text(text) else 0)
             candidates.append((score, no))
     if candidates:
         return sorted(candidates, reverse=True)[0][1]
@@ -185,14 +209,12 @@ def _find_issue_template_slide(prs: Presentation) -> int:
 
 
 def _remove_template_empty_slides(prs: Presentation) -> None:
-    """兜底删除生成后仍残留的空占位页。"""
     for idx in range(len(prs.slides) - 1, -1, -1):
         slide = prs.slides[idx]
         text = _slide_text(slide)
         if _is_placeholder_text(text):
             _delete_slide(prs, idx)
             continue
-        # 没有表格、没有业务文字、只有背景/图片的页面，也删除；封面/目录/章节页都有文字，不受影响。
         meaningful = re.sub(r"[\s\-—_：:|]+", "", text)
         if not meaningful and not _tables(slide):
             _delete_slide(prs, idx)
@@ -203,7 +225,7 @@ def _remove_placeholder_text_shapes(slide) -> None:
         try:
             if getattr(shp, "has_table", False):
                 continue
-            if _shape_is_auto_placeholder(shp) or _is_placeholder_text(_text(shp)):
+            if _shape_is_auto_placeholder(shp):
                 _remove_shape_xml(shp)
         except Exception:
             pass
