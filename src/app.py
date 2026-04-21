@@ -10,10 +10,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = BASE_DIR / "output"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-st.set_page_config(page_title="稽查总结会PPT生成器 V8.0", layout="centered")
-st.title("稽查总结会PPT生成器 V8.0")
-st.caption("Streamlit Cloud / Windows / Mac 通用版：使用 python-pptx 生成标准 .pptx，不依赖 pywin32 或本机 PowerPoint。")
-st.success("当前版本支持部署到 Streamlit Cloud，生成的PPT可用 Microsoft PowerPoint、WPS、Mac PowerPoint 打开。")
+st.set_page_config(page_title="稽查总结会PPT生成器 V7.7", layout="centered")
+st.title("稽查总结会PPT生成器 V7.7（PowerPoint原生模板概述表格精准版）")
+st.caption("本版通过 Windows PowerPoint 原生复制模板页，保留Logo、背景、母版、表格和版式；仅清空文字层后写入Excel内容。")
+
+st.info("运行要求：Windows电脑 + 已安装 Microsoft PowerPoint + 已安装 pywin32。首次运行请执行：pip install -r requirements.txt")
 
 uploads = st.file_uploader("上传Excel文件", type=["xlsx", "xlsm", "xls"], accept_multiple_files=True)
 
