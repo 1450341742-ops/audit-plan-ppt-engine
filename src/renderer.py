@@ -20,6 +20,7 @@ SLIDE_OVERVIEW = 6
 SLIDE_SCOPE = 7
 SLIDE_PART2 = 8
 SLIDE_COUNTS = 9
+SLIDE_ISSUE = 14
 SLIDE_SUGGESTION = 22
 SLIDE_ENDING = 23
 
@@ -67,13 +68,6 @@ def _delete_slide(prs: Presentation, index: int = 0) -> None:
     del prs.slides._sldIdLst[index]
 
 
-def _blank_layout(prs: Presentation):
-    try:
-        return prs.slide_layouts[6]
-    except Exception:
-        return prs.slide_layouts[0]
-
-
 def _remove_shape_xml(shape) -> None:
     try:
         shape.element.getparent().remove(shape.element)
@@ -87,32 +81,14 @@ def _text(shape) -> str:
     return ""
 
 
-def _shape_is_placeholder(shape) -> bool:
-    try:
-        if getattr(shape, "is_placeholder", False):
-            return True
-    except Exception:
-        pass
-    try:
-        if shape.element.xpath(".//p:ph"):
-            return True
-    except Exception:
-        pass
-    return False
-
-
 def _is_placeholder_text(text: str) -> bool:
     return any(p in _clean(text) for p in PLACEHOLDER_TEXTS)
-
-
-def _shape_is_auto_placeholder(shape) -> bool:
-    return _shape_is_placeholder(shape) or _is_placeholder_text(_text(shape))
 
 
 def _copy_rels(src_part, dest_part) -> dict[str, str]:
     rel_map = {}
     for r_id, rel in src_part.rels.items():
-        if "slideLayout" in rel.reltype or "slideMaster" in rel.reltype or "theme" in rel.reltype:
+        if "slideLayout" in rel.reltype:
             continue
         try:
             if rel.is_external:
@@ -132,51 +108,22 @@ def _remap_relationship_ids(xml_el, rel_map: dict[str, str]) -> None:
                 el.attrib[attr] = rel_map[val]
 
 
-def _copy_background(src_obj, dest, rel_map: dict[str, str]) -> None:
-    try:
-        bg = src_obj.element.cSld.bg
-        if bg is None:
-            return
-        new_bg = deepcopy(bg)
-        _remap_relationship_ids(new_bg, rel_map)
-        dst = dest.element.cSld
-        old = dst.bg
-        if old is not None:
-            dst.remove(old)
-        dst.insert(0, new_bg)
-    except Exception:
-        pass
-
-
-def _copy_shapes_from(src_obj, dest) -> None:
-    rel_map = _copy_rels(src_obj.part, dest.part)
-    _copy_background(src_obj, dest, rel_map)
-    for shape in src_obj.shapes:
+def _copy_slide(prs: Presentation, src_no: int):
+    """按模板页复制：保留源页版式背景，删除自动占位符，只复制源页自身内容。"""
+    source = prs.slides[src_no - 1]
+    dest = prs.slides.add_slide(source.slide_layout)
+    for shp in list(dest.shapes):
+        _remove_shape_xml(shp)
+    rel_map = _copy_rels(source.part, dest.part)
+    for shape in source.shapes:
         try:
-            if _shape_is_auto_placeholder(shape):
+            if _is_placeholder_text(_text(shape)):
                 continue
             new_el = deepcopy(shape.element)
             _remap_relationship_ids(new_el, rel_map)
             dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
         except Exception:
             pass
-
-
-def _copy_slide(prs: Presentation, src_no: int):
-    """复制模板页：空白版式 + 母版视觉元素 + 版式视觉元素 + 当前页元素。"""
-    source = prs.slides[src_no - 1]
-    dest = prs.slides.add_slide(_blank_layout(prs))
-    for shp in list(dest.shapes):
-        _remove_shape_xml(shp)
-    try:
-        _copy_shapes_from(source.slide_layout.slide_master, dest)
-    except Exception:
-        pass
-    try:
-        _copy_shapes_from(source.slide_layout, dest)
-    except Exception:
-        pass
-    _copy_shapes_from(source, dest)
     return dest
 
 
@@ -191,21 +138,6 @@ def _tables(slide):
 
 def _slide_text(slide) -> str:
     return "\n".join(_text(shp) for shp in slide.shapes if getattr(shp, "has_text_frame", False))
-
-
-def _find_issue_template_slide(prs: Presentation) -> int:
-    candidates = []
-    for no in range(10, min(21, len(prs.slides)) + 1):
-        slide = prs.slides[no - 1]
-        text = _slide_text(slide)
-        has_issue_words = any(k in text for k in ["依据", "描述", "问题分类"])
-        has_table = bool(_tables(slide))
-        if has_table or has_issue_words:
-            score = (10 if has_table else 0) + (5 if has_issue_words else 0) - (5 if _is_placeholder_text(text) else 0)
-            candidates.append((score, no))
-    if candidates:
-        return sorted(candidates, reverse=True)[0][1]
-    return min(21, len(prs.slides))
 
 
 def _remove_template_empty_slides(prs: Presentation) -> None:
@@ -225,7 +157,7 @@ def _remove_placeholder_text_shapes(slide) -> None:
         try:
             if getattr(shp, "has_table", False):
                 continue
-            if _shape_is_auto_placeholder(shp):
+            if _is_placeholder_text(_text(shp)):
                 _remove_shape_xml(shp)
         except Exception:
             pass
@@ -481,7 +413,7 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
     if original_count < 23:
         raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 23 页。请上传完整的稽查总结会模板。")
 
-    issue_template_no = _find_issue_template_slide(prs)
+    issue_template_no = SLIDE_ISSUE if original_count >= SLIDE_ISSUE else min(21, original_count)
 
     slide = _copy_slide(prs, SLIDE_COVER); _render_cover(slide, context)
     _copy_slide(prs, SLIDE_THANKS)
