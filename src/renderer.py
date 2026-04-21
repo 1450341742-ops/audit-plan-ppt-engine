@@ -58,6 +58,16 @@ def set_run_font(run, size=12, bold=False, color=TEXT):
     run.font.color.rgb = color
 
 
+def set_paragraph_text(p, text: str, size=12, bold=False, color=TEXT, align=None):
+    p.clear()
+    if align is not None:
+        p.alignment = align
+    run = p.add_run()
+    run.text = safe(text)
+    set_run_font(run, size, bold, color)
+    return run
+
+
 def add_bg(slide, title: str, page_no: int | None = None, title_size: int = 28):
     fill = slide.background.fill
     fill.solid()
@@ -67,13 +77,11 @@ def add_bg(slide, title: str, page_no: int | None = None, title_size: int = 28):
     bar.line.fill.background()
     tx = slide.shapes.add_textbox(Inches(0.42), Inches(0.33), Inches(12.3), Inches(0.55))
     p = tx.text_frame.paragraphs[0]
-    p.text = title
-    set_run_font(p.runs[0], title_size, True, NAVY)
+    set_paragraph_text(p, title, title_size, True, NAVY)
     foot = slide.shapes.add_textbox(Inches(0.45), Inches(7.1), Inches(12.4), Inches(0.2))
     fp = foot.text_frame.paragraphs[0]
-    fp.text = "北京万宁睿和医药科技有限公司" + (f"  |  {page_no}" if page_no else "")
-    fp.alignment = PP_ALIGN.RIGHT
-    set_run_font(fp.runs[0], 8, False, GRAY)
+    fp_text = "北京万宁睿和医药科技有限公司" + (f"  |  {page_no}" if page_no else "")
+    set_paragraph_text(fp, fp_text, 8, False, GRAY, PP_ALIGN.RIGHT)
 
 
 def set_cell(cell, text: str, font_size=12, bold=False, fill=None, align=PP_ALIGN.LEFT):
@@ -83,8 +91,13 @@ def set_cell(cell, text: str, font_size=12, bold=False, fill=None, align=PP_ALIG
         cell.fill.solid(); cell.fill.fore_color.rgb = fill
     for p in cell.text_frame.paragraphs:
         p.alignment = align
-        for r in p.runs:
-            set_run_font(r, font_size, bold, WHITE if fill == NAVY else TEXT)
+        if not p.runs:
+            run = p.add_run()
+            run.text = safe(text)
+            set_run_font(run, font_size, bold, WHITE if fill == NAVY else TEXT)
+        else:
+            for r in p.runs:
+                set_run_font(r, font_size, bold, WHITE if fill == NAVY else TEXT)
 
 
 def add_table(slide, data, x, y, w, h, font_size=12, first_col_w=2.0, header=False):
@@ -116,10 +129,7 @@ def add_text(slide, x, y, w, h, text, size=14, bold=False, color=TEXT, align=PP_
     tf = box.text_frame
     tf.word_wrap = True
     p = tf.paragraphs[0]
-    p.text = safe(text)
-    p.alignment = align
-    if p.runs:
-        set_run_font(p.runs[0], size, bold, color)
+    set_paragraph_text(p, text, size, bold, color, align)
     return box
 
 
