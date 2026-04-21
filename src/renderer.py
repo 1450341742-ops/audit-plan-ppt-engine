@@ -177,6 +177,16 @@ def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
             pass
 
 
+def _clear_issue_content(slide) -> None:
+    """清空问题页模板中的旧文字和旧表格，只保留背景、Logo、蓝色边框等视觉元素。"""
+    for shp in list(slide.shapes):
+        try:
+            if getattr(shp, "has_table", False) or getattr(shp, "has_text_frame", False):
+                _remove_shape_xml(shp)
+        except Exception:
+            pass
+
+
 def _add_textbox(slide, x: float, y: float, w: float, h: float, text: str,
                  font_size: int, bold: bool, color: RGBColor,
                  align=PP_ALIGN.LEFT):
@@ -280,12 +290,13 @@ def _meaningful_text(value: Any) -> bool:
 
 
 def _paginate_issue(issue: dict) -> list[dict]:
+    title = issue.get("title", "")
     basis = issue.get("basis", "—")
     desc = issue.get("description", "—")
-    if not _meaningful_text(basis) and not _meaningful_text(desc):
+    if not _meaningful_text(title) and not _meaningful_text(basis) and not _meaningful_text(desc):
         return []
-    basis_parts = _split_text(basis, 520) if _meaningful_text(basis) else ["—"]
-    desc_parts = _split_text(desc, 900) if _meaningful_text(desc) else ["—"]
+    basis_parts = _split_text(basis, 360) if _meaningful_text(basis) else ["—"]
+    desc_parts = _split_text(desc, 680) if _meaningful_text(desc) else ["—"]
     total = max(len(basis_parts), len(desc_parts))
     pages = []
     for i in range(total):
@@ -299,7 +310,7 @@ def _paginate_issue(issue: dict) -> list[dict]:
 
 
 def _has_issue_content(issue: dict) -> bool:
-    return _meaningful_text(issue.get("basis", "")) or _meaningful_text(issue.get("description", ""))
+    return _meaningful_text(issue.get("title", "")) or _meaningful_text(issue.get("basis", "")) or _meaningful_text(issue.get("description", ""))
 
 
 def _render_cover(slide, context: dict) -> None:
@@ -357,33 +368,33 @@ def _render_counts(slide, context: dict) -> None:
 
 
 def _render_issue(slide, category: str, issue: dict, idx: int, total: int) -> None:
+    _clear_issue_content(slide)
     sub_page = int(issue.get("_sub_page", 1))
     sub_total = int(issue.get("_sub_total", 1))
     tag = f"（{idx}/{total}）" if total > 1 else ""
-    cont = f" 续{sub_page}/{sub_total}" if sub_total > 1 else ""
-    title = f"问题分类:{category}{tag}{cont}"
+    cont = f"  续{sub_page}/{sub_total}" if sub_total > 1 else ""
+    page_title = f"问题分类：{category}{tag}{cont}"
+    overview = _clean(issue.get("title", "")) or category
     basis = _clean(issue.get("basis", "—"))
     desc = _clean(issue.get("description", "—"))
 
-    _remove_placeholder_text_shapes(slide)
-    ok = _replace_first_shape_containing(slide, ["问题分类"], title, 20, True, PP_ALIGN.LEFT, BLACK)
-    tables = _tables(slide)
-    wrote_table = False
-    if tables:
-        tbl = tables[0]
-        if len(tbl.rows) >= 2 and len(tbl.columns) >= 2:
-            _set_cell(tbl.cell(0, 0), "依据", 12, True, PP_ALIGN.CENTER)
-            _set_cell(tbl.cell(0, 1), basis, 12, False, PP_ALIGN.LEFT)
-            _set_cell(tbl.cell(1, 0), "描述", 12, True, PP_ALIGN.CENTER)
-            _set_cell(tbl.cell(1, 1), desc, 12, False, PP_ALIGN.LEFT)
-            wrote_table = True
-    if not ok:
-        _add_textbox(slide, 0.65, 0.48, 11.4, 0.50, title, 20, True, BLACK, PP_ALIGN.LEFT)
-    if not wrote_table:
-        _add_textbox(slide, 0.75, 1.70, 0.70, 0.30, "依据", 12, True, BLACK, PP_ALIGN.CENTER)
-        _add_textbox(slide, 1.58, 1.48, 10.55, 1.45, basis, 12, False, BLACK, PP_ALIGN.LEFT)
-        _add_textbox(slide, 0.75, 4.00, 0.70, 0.30, "描述", 12, True, BLACK, PP_ALIGN.CENTER)
-        _add_textbox(slide, 1.58, 3.70, 10.55, 2.75, desc, 12, False, BLACK, PP_ALIGN.LEFT)
+    _add_textbox(slide, 0.70, 0.52, 12.0, 0.45, page_title, 20, True, BLACK, PP_ALIGN.LEFT)
+    rows = [("问题概述", overview)]
+    if _meaningful_text(basis) and basis != "—":
+        rows.append(("依据", basis))
+    rows.append(("问题描述", desc))
+
+    shape = slide.shapes.add_table(len(rows), 2, Inches(0.65), Inches(1.22), Inches(12.05), Inches(5.45))
+    tbl = shape.table
+    tbl.columns[0].width = Inches(1.05)
+    tbl.columns[1].width = Inches(11.00)
+    heights = [0.75, 4.70] if len(rows) == 2 else [0.65, 1.55, 3.25]
+    for i, h in enumerate(heights[:len(rows)]):
+        tbl.rows[i].height = Inches(h)
+    for r, (label, value) in enumerate(rows):
+        _set_cell(tbl.cell(r, 0), label, 14, True, PP_ALIGN.CENTER)
+        size = 11 if label == "问题描述" else 10
+        _set_cell(tbl.cell(r, 1), value, size, False, PP_ALIGN.LEFT)
 
 
 def _render_suggestion(slide, text: str) -> None:
