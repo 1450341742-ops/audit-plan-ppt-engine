@@ -12,7 +12,6 @@ from pptx.dml.color import RGBColor
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = BASE_DIR / "assets" / "template.pptx"
 
-# 模板页序号，严格对应用户上传的“稽查总结会模板”
 SLIDE_COVER = 2
 SLIDE_THANKS = 3
 SLIDE_TOC = 4
@@ -92,7 +91,6 @@ def _remove_shape_xml(shape) -> None:
 
 
 def _copy_slide_background(source, dest) -> None:
-    """复制源页面自身背景，解决空白版式/母版背景丢失问题。"""
     try:
         src_c_sld = source.element.cSld
         dst_c_sld = dest.element.cSld
@@ -107,15 +105,9 @@ def _copy_slide_background(source, dest) -> None:
 
 
 def _copy_slide(prs: Presentation, src_no: int):
-    """跨平台复制模板页，优先保留源页版式/母版/背景。
-
-    不能使用完全空白版式，否则模板中放在母版或版式里的背景图会丢失。
-    这里使用 source.slide_layout，并清理自动占位符，再深拷贝源页 shape 与关系。
-    """
     source = prs.slides[src_no - 1]
     dest = prs.slides.add_slide(source.slide_layout)
 
-    # 删除 add_slide 自动生成的标题/副标题等占位符，防止“单击此处编辑标题”。
     for shp in list(dest.shapes):
         _remove_shape_xml(shp)
 
@@ -186,12 +178,18 @@ def _remove_placeholder_text_shapes(slide) -> None:
 
 
 def _is_placeholder_only_slide(slide) -> bool:
-    texts = _slide_texts(slide)
-    if not texts:
-        return False
-    joined = "\n".join(texts)
+    """识别并删除生成过程产生的空白页。
+
+    有些占位符来自母版/版式，python-pptx 在 slide.shapes 中读不到文字，
+    视觉上是“单击此处编辑标题”，但程序看到的是无文本、无表格的背景页。
+    这种页必须删除；真正的业务页一定会有表格或我们写入的文本。
+    """
     if any(getattr(shp, "has_table", False) for shp in slide.shapes):
         return False
+    texts = _slide_texts(slide)
+    if not texts:
+        return True
+    joined = "\n".join(texts)
     cleaned = joined
     for p in PLACEHOLDER_TEXTS:
         cleaned = cleaned.replace(p, "")
@@ -209,7 +207,6 @@ def _remove_placeholder_only_slides(prs: Presentation) -> None:
 
 
 def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
-    """删除模板页上的原占位文字，保留图片、背景、表格和图形。"""
     for shp in list(slide.shapes):
         try:
             if getattr(shp, "has_table", False):
