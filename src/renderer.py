@@ -45,22 +45,6 @@ RIGHT_CATS = [
     "申办方/CRO职责",
     "其他",
 ]
-CAT_TO_TEMPLATE_SLIDE = {
-    "国家药物临床试验政策法规的遵循": 10,
-    "伦理委员会审核要求的遵循": 11,
-    "知情同意书（ICF）的签署和记录": 12,
-    "原始文件的建立、内容和记录": 13,
-    "门诊/住院HIS、LIS、PACS等系统数据溯源": 14,
-    "方案依从性": 15,
-    "药物疗效/研究评价指标的评估": 16,
-    "安全性信息评估，记录与报告": 17,
-    "CRF填写（时效性、一致性、溯源性、完整性）": 18,
-    "试验用药品管理": 19,
-    "生物样本管理": 20,
-    "临床研究必须文件": 21,
-    "申办方/CRO职责": 21,
-    "其他": 21,
-}
 
 PLACEHOLDER_TEXTS = [
     "单击此处编辑标题",
@@ -83,18 +67,17 @@ def _delete_slide(prs: Presentation, index: int = 0) -> None:
     del prs.slides._sldIdLst[index]
 
 
-def _blank_layout(prs: Presentation):
-    try:
-        return prs.slide_layouts[6]
-    except Exception:
-        return prs.slide_layouts[0]
-
-
 def _remove_shape_xml(shape) -> None:
     try:
         shape.element.getparent().remove(shape.element)
     except Exception:
         pass
+
+
+def _text(shape) -> str:
+    if getattr(shape, "has_text_frame", False):
+        return _clean(shape.text)
+    return ""
 
 
 def _shape_is_placeholder(shape) -> bool:
@@ -111,11 +94,12 @@ def _shape_is_placeholder(shape) -> bool:
     return False
 
 
+def _is_placeholder_text(text: str) -> bool:
+    return any(p in _clean(text) for p in PLACEHOLDER_TEXTS)
+
+
 def _shape_is_auto_placeholder(shape) -> bool:
-    if not getattr(shape, "has_text_frame", False):
-        return False
-    t = _text(shape)
-    return _shape_is_placeholder(shape) and any(p in t for p in PLACEHOLDER_TEXTS)
+    return getattr(shape, "has_text_frame", False) and _shape_is_placeholder(shape) and _is_placeholder_text(_text(shape))
 
 
 def _copy_rels(source, dest) -> dict[str, str]:
@@ -141,35 +125,20 @@ def _remap_relationship_ids(xml_el, rel_map: dict[str, str]) -> None:
                 el.attrib[attr] = rel_map[val]
 
 
-def _copy_slide_background(source, dest, rel_map: dict[str, str]) -> None:
-    try:
-        src_bg = source.element.cSld.bg
-        if src_bg is not None:
-            bg = deepcopy(src_bg)
-            _remap_relationship_ids(bg, rel_map)
-            dst_c_sld = dest.element.cSld
-            old_bg = dst_c_sld.bg
-            if old_bg is not None:
-                dst_c_sld.remove(old_bg)
-            dst_c_sld.insert(0, bg)
-    except Exception:
-        pass
-
-
 def _copy_slide(prs: Presentation, src_no: int):
-    """严格复制模板页，但不继承母版占位符。
+    """复制模板页并严格保留该页版式背景。
 
-    本模板的蓝色听诊器背景、Logo、蓝色横条、表格边框都在“当前页 shapes”中，
-    不是必须依赖版式占位符。因此这里使用空白版式 + 复制源页全部 shape，
-    避免正文中再次出现“单击此处编辑标题/副标题”的空白页。
+    关键修复：
+    1. 使用 source.slide_layout，保留模板母版/版式里的背景和Logo；
+    2. 删除 add_slide 自动生成的标题/副标题占位符；
+    3. 只复制源页自身 shapes，跳过“单击此处编辑标题/副标题”；
+    4. 不再把 10-21 的空模板页全部生成，只使用实际有表格的模板页生成问题页。
     """
     source = prs.slides[src_no - 1]
-    dest = prs.slides.add_slide(_blank_layout(prs))
+    dest = prs.slides.add_slide(source.slide_layout)
     for shp in list(dest.shapes):
         _remove_shape_xml(shp)
-
     rel_map = _copy_rels(source, dest)
-    _copy_slide_background(source, dest, rel_map)
     for shape in source.shapes:
         try:
             if _shape_is_auto_placeholder(shape):
@@ -187,10 +156,46 @@ def _remove_original_template_slides(prs: Presentation, original_count: int) -> 
         _delete_slide(prs, 0)
 
 
-def _text(shape) -> str:
-    if getattr(shape, "has_text_frame", False):
-        return _clean(shape.text)
-    return ""
+def _tables(slide):
+    return [shp.table for shp in slide.shapes if getattr(shp, "has_table", False)]
+
+
+def _slide_text(slide) -> str:
+    return "\n".join(_text(shp) for shp in slide.shapes if getattr(shp, "has_text_frame", False))
+
+
+def _find_issue_template_slide(prs: Presentation) -> int:
+    """自动寻找真正的问题页模板，避免复制空白占位页。
+
+    之前正文大量空白页，是因为按 10、11、12... 逐分类复制时，部分模板页只是“单击此处编辑标题”的占位页。
+    现在从 10-21 页中优先找带表格或含“依据/描述/问题分类”的页面，统一作为问题明细页模板。
+    """
+    candidates = []
+    for no in range(10, min(21, len(prs.slides)) + 1):
+        slide = prs.slides[no - 1]
+        text = _slide_text(slide)
+        has_issue_words = any(k in text for k in ["依据", "描述", "问题分类"])
+        has_table = bool(_tables(slide))
+        if has_table or has_issue_words:
+            score = (10 if has_table else 0) + (5 if has_issue_words else 0) - (3 if _is_placeholder_text(text) else 0)
+            candidates.append((score, no))
+    if candidates:
+        return sorted(candidates, reverse=True)[0][1]
+    return min(21, len(prs.slides))
+
+
+def _remove_template_empty_slides(prs: Presentation) -> None:
+    """兜底删除生成后仍残留的空占位页。"""
+    for idx in range(len(prs.slides) - 1, -1, -1):
+        slide = prs.slides[idx]
+        text = _slide_text(slide)
+        if _is_placeholder_text(text):
+            _delete_slide(prs, idx)
+            continue
+        # 没有表格、没有业务文字、只有背景/图片的页面，也删除；封面/目录/章节页都有文字，不受影响。
+        meaningful = re.sub(r"[\s\-—_：:|]+", "", text)
+        if not meaningful and not _tables(slide):
+            _delete_slide(prs, idx)
 
 
 def _remove_placeholder_text_shapes(slide) -> None:
@@ -198,7 +203,7 @@ def _remove_placeholder_text_shapes(slide) -> None:
         try:
             if getattr(shp, "has_table", False):
                 continue
-            if _shape_is_auto_placeholder(shp):
+            if _shape_is_auto_placeholder(shp) or _is_placeholder_text(_text(shp)):
                 _remove_shape_xml(shp)
         except Exception:
             pass
@@ -216,26 +221,6 @@ def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
                 _remove_shape_xml(shp)
         except Exception:
             pass
-
-
-def _set_shape_text(shape, text: str, font_size: int | None = None, bold: bool | None = None,
-                    align=PP_ALIGN.LEFT, color: RGBColor | None = None) -> None:
-    if not getattr(shape, "has_text_frame", False):
-        return
-    tf = shape.text_frame
-    tf.clear()
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.alignment = align
-    run = p.add_run()
-    run.text = _clean(text) or "—"
-    if font_size:
-        run.font.size = Pt(font_size)
-    if bold is not None:
-        run.font.bold = bold
-    if color is not None:
-        run.font.color.rgb = color
-    run.font.name = "Microsoft YaHei"
 
 
 def _add_textbox(slide, x: float, y: float, w: float, h: float, text: str,
@@ -260,6 +245,26 @@ def _add_textbox(slide, x: float, y: float, w: float, h: float, text: str,
     return box
 
 
+def _set_shape_text(shape, text: str, font_size: int | None = None, bold: bool | None = None,
+                    align=PP_ALIGN.LEFT, color: RGBColor | None = None) -> None:
+    if not getattr(shape, "has_text_frame", False):
+        return
+    tf = shape.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.alignment = align
+    run = p.add_run()
+    run.text = _clean(text) or "—"
+    run.font.name = "Microsoft YaHei"
+    if font_size:
+        run.font.size = Pt(font_size)
+    if bold is not None:
+        run.font.bold = bold
+    if color is not None:
+        run.font.color.rgb = color
+
+
 def _set_cell(cell, text: str, font_size: int = 12, bold: bool | None = None,
               align=PP_ALIGN.LEFT) -> None:
     cell.text = _clean(text) or "—"
@@ -275,10 +280,6 @@ def _set_cell(cell, text: str, font_size: int = 12, bold: bool | None = None,
             r.font.size = Pt(font_size)
             if bold is not None:
                 r.font.bold = bold
-
-
-def _tables(slide):
-    return [shp.table for shp in slide.shapes if getattr(shp, "has_table", False)]
 
 
 def _replace_first_shape_containing(slide, keywords: list[str], text: str,
@@ -341,6 +342,10 @@ def _paginate_issue(issue: dict) -> list[dict]:
         x["_sub_total"] = total
         pages.append(x)
     return pages
+
+
+def _has_issue_content(issue: dict) -> bool:
+    return _meaningful_text(issue.get("basis", "")) or _meaningful_text(issue.get("description", ""))
 
 
 def _render_cover(slide, context: dict) -> None:
@@ -442,10 +447,6 @@ def _render_suggestion(slide, text: str) -> None:
         _add_textbox(slide, 1.20, 1.45, 10.9, 5.0, text or "—", 14, False, BLACK, PP_ALIGN.LEFT)
 
 
-def _has_issue_content(issue: dict) -> bool:
-    return _meaningful_text(issue.get("basis", "")) or _meaningful_text(issue.get("description", ""))
-
-
 def render_ppt(context: dict, output_path: str | Path, template_path: str | Path | None = None):
     template = Path(template_path or DEFAULT_TEMPLATE_PATH)
     output_path = Path(output_path)
@@ -457,6 +458,8 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
     original_count = len(prs.slides)
     if original_count < 23:
         raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 23 页。请上传完整的稽查总结会模板。")
+
+    issue_template_no = _find_issue_template_slide(prs)
 
     slide = _copy_slide(prs, SLIDE_COVER); _render_cover(slide, context)
     _copy_slide(prs, SLIDE_THANKS)
@@ -471,12 +474,11 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
         cat_issues = [x for x in context.get("issues", []) if x.get("category") == cat and _has_issue_content(x)]
         if not cat_issues:
             continue
-        template_no = CAT_TO_TEMPLATE_SLIDE.get(cat, SLIDE_SUGGESTION)
         for i, issue in enumerate(cat_issues, start=1):
             for page_issue in _paginate_issue(issue):
                 if not _has_issue_content(page_issue):
                     continue
-                slide = _copy_slide(prs, template_no)
+                slide = _copy_slide(prs, issue_template_no)
                 _render_issue(slide, cat, page_issue, i, len(cat_issues))
 
     sug_items = context.get("suggestions", [])
@@ -488,5 +490,6 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
 
     _copy_slide(prs, SLIDE_ENDING)
     _remove_original_template_slides(prs, original_count)
+    _remove_template_empty_slides(prs)
     prs.save(str(output_path))
     return output_path
