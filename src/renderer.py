@@ -10,7 +10,7 @@ from pptx.util import Pt, Inches
 from pptx.dml.color import RGBColor
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-TEMPLATE_PATH = BASE_DIR / "assets" / "template.pptx"
+DEFAULT_TEMPLATE_PATH = BASE_DIR / "assets" / "template.pptx"
 
 SLIDE_COVER = 2
 SLIDE_THANKS = 3
@@ -83,13 +83,6 @@ def _delete_slide(prs: Presentation, index: int = 0) -> None:
     del prs.slides._sldIdLst[index]
 
 
-def _blank_layout(prs: Presentation):
-    try:
-        return prs.slide_layouts[6]
-    except Exception:
-        return prs.slide_layouts[0]
-
-
 def _remove_shape_xml(shape) -> None:
     try:
         shape.element.getparent().remove(shape.element)
@@ -111,23 +104,23 @@ def _shape_is_placeholder(shape) -> bool:
     return False
 
 
-def _shape_is_template_placeholder_text(shape) -> bool:
+def _shape_is_auto_placeholder(shape) -> bool:
     if not getattr(shape, "has_text_frame", False):
         return False
     t = _text(shape)
-    return _shape_is_placeholder(shape) or any(p in t for p in PLACEHOLDER_TEXTS)
+    return _shape_is_placeholder(shape) and any(p in t for p in PLACEHOLDER_TEXTS)
 
 
-def _copy_rels_from_part(src_part, dest_part) -> dict[str, str]:
+def _copy_rels(source, dest) -> dict[str, str]:
     rel_map = {}
-    for r_id, rel in src_part.rels.items():
-        if "slideLayout" in rel.reltype or "slideMaster" in rel.reltype or "theme" in rel.reltype:
+    for r_id, rel in source.part.rels.items():
+        if "slideLayout" in rel.reltype:
             continue
         try:
             if rel.is_external:
-                new_rid = dest_part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+                new_rid = dest.part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
             else:
-                new_rid = dest_part.rels.get_or_add(rel.reltype, rel._target)
+                new_rid = dest.part.rels.get_or_add(rel.reltype, rel._target)
             rel_map[r_id] = new_rid
         except Exception:
             pass
@@ -141,68 +134,29 @@ def _remap_relationship_ids(xml_el, rel_map: dict[str, str]) -> None:
                 el.attrib[attr] = rel_map[val]
 
 
-def _append_shape_xml(dest, shape, rel_map: dict[str, str]) -> None:
-    new_el = deepcopy(shape.element)
-    _remap_relationship_ids(new_el, rel_map)
-    dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
-
-
-def _copy_background_xml(src_obj, dest, rel_map: dict[str, str]) -> None:
-    """复制背景XML并重映射图片关系。
-
-    之前出现“无法显示该图片”，根因是背景图在母版/版式 bg 中引用了旧 rId，
-    复制 XML 后没有把 rId 映射到目标 slide 的关系 ID。
-    """
-    try:
-        src_bg = src_obj.element.cSld.bg
-        if src_bg is not None:
-            bg = deepcopy(src_bg)
-            _remap_relationship_ids(bg, rel_map)
-            dst_c_sld = dest.element.cSld
-            old_bg = dst_c_sld.bg
-            if old_bg is not None:
-                dst_c_sld.remove(old_bg)
-            dst_c_sld.insert(0, bg)
-    except Exception:
-        pass
-
-
-def _copy_visual_base_from(source, dest) -> None:
-    """使用空白版式，但手动复制母版/版式/页面视觉元素。
-
-    - 不直接继承 source.slide_layout，避免出现“单击此处编辑标题”的空白页；
-    - 复制背景、图片、Logo、蓝色横条、表格和边框；
-    - 跳过标题/副标题占位符；
-    - 对背景图和图片关系 rId 做重映射，避免 PowerPoint 显示“无法显示该图片”。
-    """
-    copied_ids = set()
-    for src_obj in [getattr(source, "slide_master", None), getattr(source, "slide_layout", None), source]:
-        if src_obj is None:
-            continue
-        rel_map = _copy_rels_from_part(src_obj.part, dest.part)
-        _copy_background_xml(src_obj, dest, rel_map)
-        for shape in src_obj.shapes:
-            try:
-                if _shape_is_template_placeholder_text(shape):
-                    continue
-                if src_obj is not source and getattr(shape, "has_text_frame", False):
-                    continue
-                key = shape.element.xml
-                if key in copied_ids:
-                    continue
-                copied_ids.add(key)
-                _append_shape_xml(dest, shape, rel_map)
-            except Exception:
-                pass
-
-
 def _copy_slide(prs: Presentation, src_no: int):
+    """复制模板页。
+
+    重要：必须使用 source.slide_layout，这样 PPT 会保留模板母版背景、Logo、蓝色横条等样式。
+    之前改为空白版式会丢失背景，导致白底；本版恢复为源版式，并删除自动占位符。
+    """
     source = prs.slides[src_no - 1]
-    dest = prs.slides.add_slide(_blank_layout(prs))
+    dest = prs.slides.add_slide(source.slide_layout)
+
+    # 删除 add_slide 自动生成的标题/副标题占位符；母版背景与版式背景仍保留。
     for shp in list(dest.shapes):
         _remove_shape_xml(shp)
-    _copy_visual_base_from(source, dest)
-    _remove_placeholder_text_shapes(dest)
+
+    rel_map = _copy_rels(source, dest)
+    for shape in source.shapes:
+        try:
+            if _shape_is_auto_placeholder(shape):
+                continue
+            new_el = deepcopy(shape.element)
+            _remap_relationship_ids(new_el, rel_map)
+            dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
+        except Exception:
+            pass
     return dest
 
 
@@ -217,47 +171,13 @@ def _text(shape) -> str:
     return ""
 
 
-def _slide_texts(slide) -> list[str]:
-    texts = []
-    for shp in slide.shapes:
-        try:
-            t = _text(shp)
-            if t:
-                texts.append(t)
-        except Exception:
-            pass
-    return texts
-
-
 def _remove_placeholder_text_shapes(slide) -> None:
     for shp in list(slide.shapes):
         try:
             if getattr(shp, "has_table", False):
                 continue
-            if _shape_is_template_placeholder_text(shp):
+            if _shape_is_auto_placeholder(shp):
                 _remove_shape_xml(shp)
-        except Exception:
-            pass
-
-
-def _is_placeholder_only_slide(slide) -> bool:
-    if any(getattr(shp, "has_table", False) for shp in slide.shapes):
-        return False
-    texts = _slide_texts(slide)
-    if not texts:
-        return True
-    cleaned = "\n".join(texts)
-    for p in PLACEHOLDER_TEXTS:
-        cleaned = cleaned.replace(p, "")
-    cleaned = re.sub(r"[\s\-—_：:|]+", "", cleaned)
-    return cleaned == ""
-
-
-def _remove_placeholder_only_slides(prs: Presentation) -> None:
-    for idx in range(len(prs.slides) - 1, -1, -1):
-        try:
-            if _is_placeholder_only_slide(prs.slides[idx]):
-                _delete_slide(prs, idx)
         except Exception:
             pass
 
@@ -371,6 +291,15 @@ def _split_text(text: str, limit: int) -> list[str]:
     if buf:
         out.append(buf)
     return out or ["—"]
+
+
+def _meaningful_text(value: Any) -> bool:
+    t = _clean(value)
+    if not t or t in {"—", "-", "无", "NA", "N/A"}:
+        return False
+    if any(p in t for p in PLACEHOLDER_TEXTS):
+        return False
+    return len(re.sub(r"[\s\-—_：:|]+", "", t)) > 0
 
 
 def _paginate_issue(issue: dict) -> list[dict]:
@@ -491,29 +420,21 @@ def _render_suggestion(slide, text: str) -> None:
         _add_textbox(slide, 1.20, 1.45, 10.9, 5.0, text or "—", 14, False, BLACK, PP_ALIGN.LEFT)
 
 
-def _meaningful_text(value: Any) -> bool:
-    t = _clean(value)
-    if not t or t in {"—", "-", "无", "NA", "N/A"}:
-        return False
-    if any(p in t for p in PLACEHOLDER_TEXTS):
-        return False
-    return len(re.sub(r"[\s\-—_：:|]+", "", t)) > 0
-
-
 def _has_issue_content(issue: dict) -> bool:
     return _meaningful_text(issue.get("basis", "")) or _meaningful_text(issue.get("description", ""))
 
 
-def render_ppt(context: dict, output_path: str | Path):
+def render_ppt(context: dict, output_path: str | Path, template_path: str | Path | None = None):
+    template = Path(template_path or DEFAULT_TEMPLATE_PATH)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if not TEMPLATE_PATH.exists() or TEMPLATE_PATH.stat().st_size < 1024:
-        raise FileNotFoundError(f"未找到有效PPT模板：{TEMPLATE_PATH}，请上传 assets/template.pptx。")
+    if not template.exists() or template.stat().st_size < 1024 * 100:
+        raise FileNotFoundError(f"未找到有效PPT模板：{template}。请在页面先上传你的稽查总结会模板。")
 
-    prs = Presentation(str(TEMPLATE_PATH))
+    prs = Presentation(str(template))
     original_count = len(prs.slides)
     if original_count < 23:
-        raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 23 页。")
+        raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 23 页。请上传完整的稽查总结会模板。")
 
     slide = _copy_slide(prs, SLIDE_COVER); _render_cover(slide, context)
     _copy_slide(prs, SLIDE_THANKS)
@@ -530,8 +451,7 @@ def render_ppt(context: dict, output_path: str | Path):
             continue
         template_no = CAT_TO_TEMPLATE_SLIDE.get(cat, SLIDE_SUGGESTION)
         for i, issue in enumerate(cat_issues, start=1):
-            pages = _paginate_issue(issue)
-            for page_issue in pages:
+            for page_issue in _paginate_issue(issue):
                 if not _has_issue_content(page_issue):
                     continue
                 slide = _copy_slide(prs, template_no)
@@ -546,6 +466,5 @@ def render_ppt(context: dict, output_path: str | Path):
 
     _copy_slide(prs, SLIDE_ENDING)
     _remove_original_template_slides(prs, original_count)
-    _remove_placeholder_only_slides(prs)
     prs.save(str(output_path))
     return output_path
