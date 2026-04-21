@@ -83,6 +83,13 @@ def _delete_slide(prs: Presentation, index: int = 0) -> None:
     del prs.slides._sldIdLst[index]
 
 
+def _blank_layout(prs: Presentation):
+    try:
+        return prs.slide_layouts[6]
+    except Exception:
+        return prs.slide_layouts[0]
+
+
 def _remove_shape_xml(shape) -> None:
     try:
         shape.element.getparent().remove(shape.element)
@@ -90,12 +97,57 @@ def _remove_shape_xml(shape) -> None:
         pass
 
 
-def _copy_slide_background(source, dest) -> None:
+def _shape_is_placeholder(shape) -> bool:
     try:
-        src_c_sld = source.element.cSld
-        dst_c_sld = dest.element.cSld
-        src_bg = src_c_sld.bg
+        if getattr(shape, "is_placeholder", False):
+            return True
+    except Exception:
+        pass
+    try:
+        if shape.element.xpath(".//p:ph"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _shape_is_template_placeholder_text(shape) -> bool:
+    if not getattr(shape, "has_text_frame", False):
+        return False
+    t = _text(shape)
+    return _shape_is_placeholder(shape) or any(p in t for p in PLACEHOLDER_TEXTS)
+
+
+def _copy_rels_from_part(src_part, dest_part) -> dict[str, str]:
+    rel_map = {}
+    for r_id, rel in src_part.rels.items():
+        if "slideLayout" in rel.reltype or "slideMaster" in rel.reltype or "theme" in rel.reltype:
+            continue
+        try:
+            if rel.is_external:
+                new_rid = dest_part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+            else:
+                new_rid = dest_part.rels.get_or_add(rel.reltype, rel._target)
+            rel_map[r_id] = new_rid
+        except Exception:
+            pass
+    return rel_map
+
+
+def _append_shape_xml(dest, shape, rel_map: dict[str, str]) -> None:
+    new_el = deepcopy(shape.element)
+    for el in new_el.iter():
+        for attr, val in list(el.attrib.items()):
+            if val in rel_map:
+                el.attrib[attr] = rel_map[val]
+    dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
+
+
+def _copy_background_xml(src_obj, dest) -> None:
+    try:
+        src_bg = src_obj.element.cSld.bg
         if src_bg is not None:
+            dst_c_sld = dest.element.cSld
             old_bg = dst_c_sld.bg
             if old_bg is not None:
                 dst_c_sld.remove(old_bg)
@@ -104,36 +156,44 @@ def _copy_slide_background(source, dest) -> None:
         pass
 
 
-def _copy_slide(prs: Presentation, src_no: int):
-    source = prs.slides[src_no - 1]
-    dest = prs.slides.add_slide(source.slide_layout)
-
-    for shp in list(dest.shapes):
-        _remove_shape_xml(shp)
-
-    _copy_slide_background(source, dest)
-
-    rel_map = {}
-    for r_id, rel in source.part.rels.items():
-        if "slideLayout" in rel.reltype:
+def _copy_visual_base_from(source, dest) -> None:
+    """复制模板母版/版式中的视觉背景，但跳过标题/副标题占位符。"""
+    copied_ids = set()
+    for src_obj in [getattr(source, "slide_master", None), getattr(source, "slide_layout", None), source]:
+        if src_obj is None:
             continue
         try:
-            if rel.is_external:
-                new_rid = dest.part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
-            else:
-                new_rid = dest.part.rels.get_or_add(rel.reltype, rel._target)
-            rel_map[r_id] = new_rid
+            _copy_background_xml(src_obj, dest)
         except Exception:
             pass
+        rel_map = _copy_rels_from_part(src_obj.part, dest.part)
+        for shape in src_obj.shapes:
+            try:
+                if _shape_is_template_placeholder_text(shape):
+                    continue
+                # 版式/母版中的普通文本大多是占位说明，避免复制成空白页正文。
+                if src_obj is not source and getattr(shape, "has_text_frame", False):
+                    continue
+                key = shape.element.xml
+                if key in copied_ids:
+                    continue
+                copied_ids.add(key)
+                _append_shape_xml(dest, shape, rel_map)
+            except Exception:
+                pass
 
-    for shape in source.shapes:
-        new_el = deepcopy(shape.element)
-        for el in new_el.iter():
-            for attr, val in list(el.attrib.items()):
-                if val in rel_map:
-                    el.attrib[attr] = rel_map[val]
-        dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
 
+def _copy_slide(prs: Presentation, src_no: int):
+    """严格模板跨平台复制。
+
+    使用空白版式生成目标页，避免母版占位符显示；再手动复制母版/版式/页面中的视觉元素。
+    这样既保留模板背景，又不会生成“单击此处编辑标题”的空白页。
+    """
+    source = prs.slides[src_no - 1]
+    dest = prs.slides.add_slide(_blank_layout(prs))
+    for shp in list(dest.shapes):
+        _remove_shape_xml(shp)
+    _copy_visual_base_from(source, dest)
     _remove_placeholder_text_shapes(dest)
     return dest
 
@@ -161,36 +221,24 @@ def _slide_texts(slide) -> list[str]:
     return texts
 
 
-def _is_placeholder_text(t: str) -> bool:
-    t = _clean(t)
-    return any(p in t for p in PLACEHOLDER_TEXTS)
-
-
 def _remove_placeholder_text_shapes(slide) -> None:
     for shp in list(slide.shapes):
         try:
             if getattr(shp, "has_table", False):
                 continue
-            if getattr(shp, "has_text_frame", False) and _is_placeholder_text(_text(shp)):
+            if _shape_is_template_placeholder_text(shp):
                 _remove_shape_xml(shp)
         except Exception:
             pass
 
 
 def _is_placeholder_only_slide(slide) -> bool:
-    """识别并删除生成过程产生的空白页。
-
-    有些占位符来自母版/版式，python-pptx 在 slide.shapes 中读不到文字，
-    视觉上是“单击此处编辑标题”，但程序看到的是无文本、无表格的背景页。
-    这种页必须删除；真正的业务页一定会有表格或我们写入的文本。
-    """
     if any(getattr(shp, "has_table", False) for shp in slide.shapes):
         return False
     texts = _slide_texts(slide)
     if not texts:
         return True
-    joined = "\n".join(texts)
-    cleaned = joined
+    cleaned = "\n".join(texts)
     for p in PLACEHOLDER_TEXTS:
         cleaned = cleaned.replace(p, "")
     cleaned = re.sub(r"[\s\-—_：:|]+", "", cleaned)
