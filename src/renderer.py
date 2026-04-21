@@ -84,24 +84,42 @@ def _delete_slide(prs: Presentation, index: int = 0) -> None:
     del prs.slides._sldIdLst[index]
 
 
-def _blank_layout(prs: Presentation):
-    # 尽量使用空白版式，避免继承模板版式中的“单击此处编辑标题/副标题”占位符。
+def _remove_shape_xml(shape) -> None:
     try:
-        return prs.slide_layouts[6]
+        shape.element.getparent().remove(shape.element)
     except Exception:
-        return prs.slide_layouts[0]
+        pass
+
+
+def _copy_slide_background(source, dest) -> None:
+    """复制源页面自身背景，解决空白版式/母版背景丢失问题。"""
+    try:
+        src_c_sld = source.element.cSld
+        dst_c_sld = dest.element.cSld
+        src_bg = src_c_sld.bg
+        if src_bg is not None:
+            old_bg = dst_c_sld.bg
+            if old_bg is not None:
+                dst_c_sld.remove(old_bg)
+            dst_c_sld.insert(0, deepcopy(src_bg))
+    except Exception:
+        pass
 
 
 def _copy_slide(prs: Presentation, src_no: int):
-    """跨平台复制模板页。
+    """跨平台复制模板页，优先保留源页版式/母版/背景。
 
-    关键点：新增页必须使用空白版式，而不是 source.slide_layout，
-    否则会继承母版中的标题/副标题占位符，生成大量“单击此处编辑标题”的空白页。
+    不能使用完全空白版式，否则模板中放在母版或版式里的背景图会丢失。
+    这里使用 source.slide_layout，并清理自动占位符，再深拷贝源页 shape 与关系。
     """
     source = prs.slides[src_no - 1]
-    dest = prs.slides.add_slide(_blank_layout(prs))
+    dest = prs.slides.add_slide(source.slide_layout)
+
+    # 删除 add_slide 自动生成的标题/副标题等占位符，防止“单击此处编辑标题”。
     for shp in list(dest.shapes):
-        shp.element.getparent().remove(shp.element)
+        _remove_shape_xml(shp)
+
+    _copy_slide_background(source, dest)
 
     rel_map = {}
     for r_id, rel in source.part.rels.items():
@@ -123,6 +141,8 @@ def _copy_slide(prs: Presentation, src_no: int):
                 if val in rel_map:
                     el.attrib[attr] = rel_map[val]
         dest.shapes._spTree.insert_element_before(new_el, "p:extLst")
+
+    _remove_placeholder_text_shapes(dest)
     return dest
 
 
@@ -149,6 +169,22 @@ def _slide_texts(slide) -> list[str]:
     return texts
 
 
+def _is_placeholder_text(t: str) -> bool:
+    t = _clean(t)
+    return any(p in t for p in PLACEHOLDER_TEXTS)
+
+
+def _remove_placeholder_text_shapes(slide) -> None:
+    for shp in list(slide.shapes):
+        try:
+            if getattr(shp, "has_table", False):
+                continue
+            if getattr(shp, "has_text_frame", False) and _is_placeholder_text(_text(shp)):
+                _remove_shape_xml(shp)
+        except Exception:
+            pass
+
+
 def _is_placeholder_only_slide(slide) -> bool:
     texts = _slide_texts(slide)
     if not texts:
@@ -156,7 +192,6 @@ def _is_placeholder_only_slide(slide) -> bool:
     joined = "\n".join(texts)
     if any(getattr(shp, "has_table", False) for shp in slide.shapes):
         return False
-    # 只要页面上除占位符外没有业务文字，就视为空白页删除。
     cleaned = joined
     for p in PLACEHOLDER_TEXTS:
         cleaned = cleaned.replace(p, "")
@@ -183,7 +218,7 @@ def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
                 t = _text(shp)
                 if keep_keywords and any(k in t for k in keep_keywords):
                     continue
-                shp.element.getparent().remove(shp.element)
+                _remove_shape_xml(shp)
         except Exception:
             pass
 
@@ -367,9 +402,7 @@ def _render_issue(slide, category: str, issue: dict, idx: int, total: int) -> No
     basis = _clean(issue.get("basis", "—"))
     desc = _clean(issue.get("description", "—"))
 
-    # 删除未被实际使用的标题/副标题占位符，避免显示“单击此处编辑标题”。
-    _remove_text_shapes(slide, keep_keywords=("问题分类",))
-
+    _remove_placeholder_text_shapes(slide)
     ok = _replace_first_shape_containing(slide, ["问题分类"], title, 20, True, PP_ALIGN.LEFT, BLACK)
     tables = _tables(slide)
     wrote_table = False
@@ -391,6 +424,7 @@ def _render_issue(slide, category: str, issue: dict, idx: int, total: int) -> No
 
 
 def _render_suggestion(slide, text: str) -> None:
+    _remove_placeholder_text_shapes(slide)
     _replace_first_shape_containing(slide, ["建议项"], "建议项：", 28, True, PP_ALIGN.LEFT, BLACK)
     tables = _tables(slide)
     wrote = False
@@ -414,7 +448,6 @@ def _meaningful_text(value: Any) -> bool:
 
 
 def _has_issue_content(issue: dict) -> bool:
-    # 不再仅凭 title 判断是否生成页，避免只有标题/占位符但无依据、描述的空白页。
     return _meaningful_text(issue.get("basis", "")) or _meaningful_text(issue.get("description", ""))
 
 
