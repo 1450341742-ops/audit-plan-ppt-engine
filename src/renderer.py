@@ -12,8 +12,8 @@ from pptx.dml.color import RGBColor
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_TEMPLATE_PATH = BASE_DIR / "assets" / "template.pptx"
 
-# 新版模板页码：第8/9页为“共性问题/个性问题”，第24页为“Q&A”。
-# 这三页只保留模板原样，不向其中写入任何内容。
+# 新版模板：共性问题、个性问题、Q&A 只复制模板页，不写入内容。
+# Q&A 页不再固定写死页码，优先按页面文字自动识别，避免模板页数调整后漏加。
 SLIDE_COVER = 2
 SLIDE_THANKS = 3
 SLIDE_TOC = 4
@@ -25,8 +25,6 @@ SLIDE_INDIVIDUAL = 9
 SLIDE_PART2 = 10
 SLIDE_COUNTS = 11
 SLIDE_ISSUE = 12
-SLIDE_QA = 24
-SLIDE_ENDING = 25
 
 WHITE = RGBColor(255, 255, 255)
 YELLOW = RGBColor(255, 242, 0)
@@ -142,6 +140,34 @@ def _tables(slide):
 
 def _slide_text(slide) -> str:
     return "\n".join(_text(shp) for shp in slide.shapes if getattr(shp, "has_text_frame", False))
+
+
+def _normalized_slide_text(slide) -> str:
+    text = _slide_text(slide)
+    return re.sub(r"\s+", "", text).upper()
+
+
+def _find_slide_no(prs: Presentation, keywords: list[str], start: int = 1, end: int | None = None) -> int | None:
+    """按页面文字查找模板页码，返回 1-based slide no。"""
+    end = end or len(prs.slides)
+    normalized_keywords = [re.sub(r"\s+", "", k).upper() for k in keywords]
+    for no in range(max(1, start), min(end, len(prs.slides)) + 1):
+        text = _normalized_slide_text(prs.slides[no - 1])
+        if any(k in text for k in normalized_keywords):
+            return no
+    return None
+
+
+def _find_qa_slide_no(prs: Presentation) -> int | None:
+    # 优先识别含 Q&A / Q＆A / Q & A 的页面；若模板文字被拆分，也兼容 “Q” “A” 同页且接近末尾的情况。
+    no = _find_slide_no(prs, ["Q&A", "Q＆A", "Q&A：", "Q&A页", "问答", "答疑"], start=1)
+    if no:
+        return no
+    for i in range(len(prs.slides), 0, -1):
+        text = _normalized_slide_text(prs.slides[i - 1])
+        if "Q" in text and "A" in text and "&" in text:
+            return i
+    return None
 
 
 def _remove_template_empty_slides(prs: Presentation) -> None:
@@ -359,8 +385,8 @@ def _render_issue(slide, category: str, issue: dict, idx: int, total: int) -> No
         _set_cell(tbl.cell(r, 1), value, size, False, PP_ALIGN.LEFT)
 
 
-def _copy_if_exists(prs: Presentation, src_no: int):
-    if 1 <= src_no <= len(prs.slides):
+def _copy_if_exists(prs: Presentation, src_no: int | None):
+    if src_no and 1 <= src_no <= len(prs.slides):
         return _copy_slide(prs, src_no)
     return None
 
@@ -377,6 +403,10 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
     if original_count < SLIDE_COUNTS:
         raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 {SLIDE_COUNTS} 页。请上传完整的稽查总结会模板。")
 
+    qa_slide_no = _find_qa_slide_no(prs)
+    ending_slide_no = original_count
+    if qa_slide_no == ending_slide_no and original_count > 1:
+        ending_slide_no = original_count - 1
     issue_template_no = SLIDE_ISSUE if original_count >= SLIDE_ISSUE else SLIDE_COUNTS
 
     slide = _copy_slide(prs, SLIDE_COVER); _render_cover(slide, context)
@@ -402,8 +432,8 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
                 _render_issue(slide, cat, page_issue, i, len(cat_issues))
 
     # 新模板已删除“建议项”页，生成程序不再读取或写入 suggestions。
-    _copy_if_exists(prs, SLIDE_QA)      # Q&A页：仅保留模板，不写内容
-    _copy_if_exists(prs, SLIDE_ENDING)
+    _copy_if_exists(prs, qa_slide_no)       # Q&A 页：自动识别并复制，不写内容
+    _copy_if_exists(prs, ending_slide_no)   # 结束页：默认复制模板最后一页
     _remove_original_template_slides(prs, original_count)
     _remove_template_empty_slides(prs)
     prs.save(str(output_path))
