@@ -20,7 +20,7 @@ def render_one(excel_path: str | Path, output_dir: str | Path | None = None, tem
     output_dir = Path(output_dir or DEFAULT_OUTPUT)
     output_dir.mkdir(parents=True, exist_ok=True)
     context = parse_excel(excel_path)
-    out = output_dir / f"{safe_stem(excel_path.stem)}-V8.2严格模板版.pptx"
+    out = output_dir / f"{safe_stem(excel_path.stem)}-V8.3新版模板版.pptx"
     render_ppt(context, out, template_path=Path(template_path or DEFAULT_TEMPLATE))
     return out
 
