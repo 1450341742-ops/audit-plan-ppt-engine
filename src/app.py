@@ -13,20 +13,20 @@ TEMPLATE_PATH = ASSETS_DIR / "template.pptx"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-st.set_page_config(page_title="稽查总结会PPT生成器 V8.2", layout="centered")
-st.title("稽查总结会PPT生成器 V8.2（严格模板上传版）")
-st.caption("必须使用你上传的 PPT 模板生成：先上传 template.pptx，再上传 Excel。支持 Streamlit Cloud / Windows / Mac，生成标准 .pptx，可用 PowerPoint、WPS 打开。")
+st.set_page_config(page_title="稽查总结会PPT生成器 V8.3", layout="centered")
+st.title("稽查总结会PPT生成器 V8.3（新版模板适配版）")
+st.caption("已适配新版稽查总结会模板：保留共性问题、个性问题、Q&A 三页但不写入内容；已取消建议项页；生成标准 .pptx，可用 PowerPoint、WPS 打开。")
 
 repo_template_ok = TEMPLATE_PATH.exists() and TEMPLATE_PATH.stat().st_size > 1024 * 100
 if repo_template_ok:
     st.success(f"已检测到仓库模板：assets/template.pptx（{TEMPLATE_PATH.stat().st_size/1024/1024:.1f} MB）")
 else:
-    st.warning("当前仓库中的 assets/template.pptx 不存在或不是有效模板。请先上传你的稽查总结会PPT模板。")
+    st.warning("当前仓库中的 assets/template.pptx 不存在或不是有效模板。请先上传你的新版稽查总结会PPT模板。")
 
-template_upload = st.file_uploader("① 上传PPT模板（必须上传你的稽查总结会模板，文件名可任意）", type=["pptx"], accept_multiple_files=False)
+template_upload = st.file_uploader("① 上传PPT模板（可选；如仓库模板未更新或需临时替换，请上传新版稽查总结会模板）", type=["pptx"], accept_multiple_files=False)
 if template_upload is not None:
     TEMPLATE_PATH.write_bytes(template_upload.getvalue())
-    st.success(f"模板已加载：{template_upload.name}（{TEMPLATE_PATH.stat().st_size/1024/1024:.1f} MB）。本次生成将严格使用该模板。")
+    st.success(f"模板已加载：{template_upload.name}（{TEMPLATE_PATH.stat().st_size/1024/1024:.1f} MB）。本次生成将使用该模板。")
 
 uploads = st.file_uploader("② 上传Excel文件", type=["xlsx", "xlsm", "xls"], accept_multiple_files=True)
 
@@ -43,7 +43,7 @@ def zip_bytes(paths: list[Path]) -> bytes:
 if st.button("开始生成", type="primary"):
     template_ok = TEMPLATE_PATH.exists() and TEMPLATE_PATH.stat().st_size > 1024 * 100
     if not template_ok:
-        st.error("请先上传有效的 PPT 模板。当前模板为空或无效，无法严格按模板生成。")
+        st.error("请先上传有效的 PPT 模板。当前模板为空或无效，无法按模板生成。")
     elif not uploads:
         st.warning("请上传 Excel 文件")
     else:
@@ -71,7 +71,7 @@ if st.button("开始生成", type="primary"):
             st.download_button(
                 "下载全部PPT（ZIP）",
                 data=zip_bytes(outs),
-                file_name="稽查总结会PPT生成结果.zip",
+                file_name="audit_summary_ppt_results.zip",
                 mime="application/zip",
                 key="zip_all",
             )
