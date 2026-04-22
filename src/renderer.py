@@ -12,17 +12,21 @@ from pptx.dml.color import RGBColor
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_TEMPLATE_PATH = BASE_DIR / "assets" / "template.pptx"
 
+# 新版模板页码：第8/9页为“共性问题/个性问题”，第24页为“Q&A”。
+# 这三页只保留模板原样，不向其中写入任何内容。
 SLIDE_COVER = 2
 SLIDE_THANKS = 3
 SLIDE_TOC = 4
 SLIDE_PART1 = 5
 SLIDE_OVERVIEW = 6
 SLIDE_SCOPE = 7
-SLIDE_PART2 = 8
-SLIDE_COUNTS = 9
-SLIDE_ISSUE = 14
-SLIDE_SUGGESTION = 22
-SLIDE_ENDING = 23
+SLIDE_COMMON = 8
+SLIDE_INDIVIDUAL = 9
+SLIDE_PART2 = 10
+SLIDE_COUNTS = 11
+SLIDE_ISSUE = 12
+SLIDE_QA = 24
+SLIDE_ENDING = 25
 
 WHITE = RGBColor(255, 255, 255)
 YELLOW = RGBColor(255, 242, 0)
@@ -152,17 +156,6 @@ def _remove_template_empty_slides(prs: Presentation) -> None:
             _delete_slide(prs, idx)
 
 
-def _remove_placeholder_text_shapes(slide) -> None:
-    for shp in list(slide.shapes):
-        try:
-            if getattr(shp, "has_table", False):
-                continue
-            if _is_placeholder_text(_text(shp)):
-                _remove_shape_xml(shp)
-        except Exception:
-            pass
-
-
 def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
     for shp in list(slide.shapes):
         try:
@@ -178,7 +171,7 @@ def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
 
 
 def _clear_issue_content(slide) -> None:
-    """清空问题页模板中的旧文字和旧表格，只保留背景、Logo、蓝色边框等视觉元素。"""
+    """清空问题页模板中的旧文字和旧表格，只保留背景、边框等视觉元素。"""
     for shp in list(slide.shapes):
         try:
             if getattr(shp, "has_table", False) or getattr(shp, "has_text_frame", False):
@@ -209,26 +202,6 @@ def _add_textbox(slide, x: float, y: float, w: float, h: float, text: str,
     return box
 
 
-def _set_shape_text(shape, text: str, font_size: int | None = None, bold: bool | None = None,
-                    align=PP_ALIGN.LEFT, color: RGBColor | None = None) -> None:
-    if not getattr(shape, "has_text_frame", False):
-        return
-    tf = shape.text_frame
-    tf.clear()
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.alignment = align
-    run = p.add_run()
-    run.text = _clean(text) or "—"
-    run.font.name = "Microsoft YaHei"
-    if font_size:
-        run.font.size = Pt(font_size)
-    if bold is not None:
-        run.font.bold = bold
-    if color is not None:
-        run.font.color.rgb = color
-
-
 def _set_cell(cell, text: str, font_size: int = 12, bold: bool | None = None,
               align=PP_ALIGN.LEFT) -> None:
     cell.text = _clean(text) or "—"
@@ -244,17 +217,6 @@ def _set_cell(cell, text: str, font_size: int = 12, bold: bool | None = None,
             r.font.size = Pt(font_size)
             if bold is not None:
                 r.font.bold = bold
-
-
-def _replace_first_shape_containing(slide, keywords: list[str], text: str,
-                                    font_size: int | None = None, bold: bool | None = None,
-                                    align=PP_ALIGN.LEFT, color: RGBColor | None = None) -> bool:
-    for shp in slide.shapes:
-        t = _text(shp)
-        if t and any(k in t for k in keywords):
-            _set_shape_text(shp, text, font_size=font_size, bold=bold, align=align, color=color)
-            return True
-    return False
 
 
 def _split_text(text: str, limit: int) -> list[str]:
@@ -324,7 +286,7 @@ def _render_cover(slide, context: dict) -> None:
     _add_textbox(slide, 0.25, 3.25, 12.70, 0.75, title, 28, True, WHITE, PP_ALIGN.LEFT)
     _add_textbox(slide, 0.25, 4.12, 12.70, 0.55, "中心稽查末次会议", 28, True, YELLOW, PP_ALIGN.LEFT)
     _add_textbox(slide, 0.35, 5.13, 12.30, 0.35, f"时间：{audit_date}", 14, True, WHITE, PP_ALIGN.LEFT)
-    _add_textbox(slide, 0.35, 5.72, 12.30, 0.35, "北京万宁睿和医药科技有限公司", 14, True, WHITE, PP_ALIGN.LEFT)
+    # 新模板已去除公司名称和 Logo，封面不再自动写入公司名称。
 
 
 def _render_overview(slide, context: dict) -> None:
@@ -339,7 +301,7 @@ def _render_overview(slide, context: dict) -> None:
     center = _clean(meta.get("center_name", "—"))
     enrollment = _clean(meta.get("enrollment", "—"))
     audit_date = _clean(meta.get("audit_date", "—"))
-    auditor = _clean(meta.get("auditor", meta.get("audit_company", "北京万宁睿和医药科技有限公司")))
+    auditor = _clean(meta.get("auditor", "—"))
     subjects = "、".join(context.get("audited_subjects") or ["—"])
     rows = [
         [(0, 0, "方案名称", 16, True), (0, 1, project, 16, False)],
@@ -397,19 +359,10 @@ def _render_issue(slide, category: str, issue: dict, idx: int, total: int) -> No
         _set_cell(tbl.cell(r, 1), value, size, False, PP_ALIGN.LEFT)
 
 
-def _render_suggestion(slide, text: str) -> None:
-    _remove_placeholder_text_shapes(slide)
-    _replace_first_shape_containing(slide, ["建议项"], "建议项：", 28, True, PP_ALIGN.LEFT, BLACK)
-    tables = _tables(slide)
-    wrote = False
-    if tables:
-        tbl = tables[0]
-        if len(tbl.rows) >= 1 and len(tbl.columns) >= 2:
-            _set_cell(tbl.cell(0, 0), "描述", 14, True, PP_ALIGN.CENTER)
-            _set_cell(tbl.cell(0, 1), text or "—", 14, False, PP_ALIGN.LEFT)
-            wrote = True
-    if not wrote:
-        _add_textbox(slide, 1.20, 1.45, 10.9, 5.0, text or "—", 14, False, BLACK, PP_ALIGN.LEFT)
+def _copy_if_exists(prs: Presentation, src_no: int):
+    if 1 <= src_no <= len(prs.slides):
+        return _copy_slide(prs, src_no)
+    return None
 
 
 def render_ppt(context: dict, output_path: str | Path, template_path: str | Path | None = None):
@@ -421,10 +374,10 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
 
     prs = Presentation(str(template))
     original_count = len(prs.slides)
-    if original_count < 23:
-        raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 23 页。请上传完整的稽查总结会模板。")
+    if original_count < SLIDE_COUNTS:
+        raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 {SLIDE_COUNTS} 页。请上传完整的稽查总结会模板。")
 
-    issue_template_no = SLIDE_ISSUE if original_count >= SLIDE_ISSUE else min(21, original_count)
+    issue_template_no = SLIDE_ISSUE if original_count >= SLIDE_ISSUE else SLIDE_COUNTS
 
     slide = _copy_slide(prs, SLIDE_COVER); _render_cover(slide, context)
     _copy_slide(prs, SLIDE_THANKS)
@@ -432,6 +385,8 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
     _copy_slide(prs, SLIDE_PART1)
     slide = _copy_slide(prs, SLIDE_OVERVIEW); _render_overview(slide, context)
     _copy_slide(prs, SLIDE_SCOPE)
+    _copy_if_exists(prs, SLIDE_COMMON)      # 共性问题页：仅保留模板，不写内容
+    _copy_if_exists(prs, SLIDE_INDIVIDUAL)  # 个性问题页：仅保留模板，不写内容
     _copy_slide(prs, SLIDE_PART2)
     slide = _copy_slide(prs, SLIDE_COUNTS); _render_counts(slide, context)
 
@@ -446,14 +401,9 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
                 slide = _copy_slide(prs, issue_template_no)
                 _render_issue(slide, cat, page_issue, i, len(cat_issues))
 
-    sug_items = context.get("suggestions", [])
-    sug_text = "\n\n".join([f"【{s.get('category', '其他')}】{s.get('text', '')}" for s in sug_items if s.get("text")]) or "—"
-    for text_page in _split_text(sug_text, 650):
-        if _clean(text_page) and _clean(text_page) != "—":
-            slide = _copy_slide(prs, SLIDE_SUGGESTION)
-            _render_suggestion(slide, text_page)
-
-    _copy_slide(prs, SLIDE_ENDING)
+    # 新模板已删除“建议项”页，生成程序不再读取或写入 suggestions。
+    _copy_if_exists(prs, SLIDE_QA)      # Q&A页：仅保留模板，不写内容
+    _copy_if_exists(prs, SLIDE_ENDING)
     _remove_original_template_slides(prs, original_count)
     _remove_template_empty_slides(prs)
     prs.save(str(output_path))
