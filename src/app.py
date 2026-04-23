@@ -23,7 +23,11 @@ if repo_template_ok:
 else:
     st.warning("当前仓库中的 assets/template.pptx 不存在或不是有效模板。请先上传你的新版稽查总结会PPT模板。")
 
-template_upload = st.file_uploader("① 上传PPT模板（可选；如仓库模板未更新或需临时替换，请上传新版稽查总结会模板）", type=["pptx"], accept_multiple_files=False)
+template_upload = st.file_uploader(
+    "① 上传PPT模板（可选；如仓库模板未更新或需临时替换，请上传新版稽查总结会模板）",
+    type=["pptx"],
+    accept_multiple_files=False,
+)
 if template_upload is not None:
     TEMPLATE_PATH.write_bytes(template_upload.getvalue())
     st.success(f"模板已加载：{template_upload.name}（{TEMPLATE_PATH.stat().st_size/1024/1024:.1f} MB）。本次生成将使用该模板。")
@@ -48,7 +52,7 @@ if st.button("开始生成", type="primary"):
         st.warning("请上传 Excel 文件")
     else:
         outs = []
-        for f in uploads:
+        for file_idx, f in enumerate(uploads):
             in_path = OUT_DIR / f.name
             in_path.write_bytes(f.getvalue())
             try:
@@ -59,19 +63,19 @@ if st.button("开始生成", type="primary"):
                 st.code(traceback.format_exc(), language="python")
         if outs:
             st.success("生成完成")
-            for p in outs:
+            for idx, p in enumerate(outs):
                 with open(p, "rb") as fp:
                     st.download_button(
                         f"下载 {p.name}",
                         data=fp.read(),
                         file_name=p.name,
                         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        key=p.name,
+                        key=f"download_{idx}_{p.name}",
                     )
             st.download_button(
                 "下载全部PPT（ZIP）",
                 data=zip_bytes(outs),
                 file_name="audit_summary_ppt_results.zip",
                 mime="application/zip",
-                key="zip_all",
+                key=f"zip_all_{len(outs)}",
             )
