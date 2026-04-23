@@ -142,15 +142,62 @@ def _slide_text(slide) -> str:
     return "\n".join(_text(shp) for shp in slide.shapes if getattr(shp, "has_text_frame", False))
 
 
+def _has_meaningful_non_text_content(slide) -> bool:
+    """保留图片页、图形页、装饰页，避免把 Q&A 这类图片主视觉页误删。"""
+    for shp in slide.shapes:
+        try:
+            if getattr(shp, "has_table", False):
+                return True
+            if getattr(shp, "has_text_frame", False):
+                if not _is_placeholder_text(_text(shp)) and _clean(_text(shp)):
+                    return True
+                continue
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _has_meaningful_non_text_content(slide) -> bool:
+    """保留图片页、图形页、装饰页，避免把 Q&A 这类图片主视觉页误删。"""
+    for shp in slide.shapes:
+        try:
+            if getattr(shp, "has_table", False):
+                return True
+            if getattr(shp, "has_text_frame", False):
+                if not _is_placeholder_text(_text(shp)) and _clean(_text(shp)):
+                    return True
+                continue
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _has_meaningful_non_text_content(slide) -> bool:
+    """保留图片页、图形页、装饰页，避免把 Q&A 这类图片主视觉页误删。"""
+    for shp in slide.shapes:
+        try:
+            if getattr(shp, "has_table", False):
+                return True
+            if getattr(shp, "has_text_frame", False):
+                if not _is_placeholder_text(_text(shp)) and _clean(_text(shp)):
+                    return True
+                continue
+            return True
+        except Exception:
+            continue
+    return False
+
 def _remove_template_empty_slides(prs: Presentation) -> None:
     for idx in range(len(prs.slides) - 1, -1, -1):
         slide = prs.slides[idx]
         text = _slide_text(slide)
-        if _is_placeholder_text(text):
+        if _is_placeholder_text(text) and not _has_meaningful_non_text_content(slide):
             _delete_slide(prs, idx)
             continue
         meaningful = re.sub(r"[\s\-—_：:|]+", "", text)
-        if not meaningful and not _tables(slide):
+        if not meaningful and not _has_meaningful_non_text_content(slide):
             _delete_slide(prs, idx)
 
 
