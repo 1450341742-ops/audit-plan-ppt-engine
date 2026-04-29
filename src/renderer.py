@@ -12,8 +12,6 @@ from pptx.dml.color import RGBColor
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_TEMPLATE_PATH = BASE_DIR / "assets" / "template.pptx"
 
-# 新版模板：共性问题、个性问题、Q&A 只复制模板页，不写入内容。
-# 按你的要求，Q&A 固定放在倒数第二页；结束页固定放在最后一页。
 SLIDE_COVER = 2
 SLIDE_THANKS = 3
 SLIDE_TOC = 4
@@ -30,32 +28,9 @@ WHITE = RGBColor(255, 255, 255)
 YELLOW = RGBColor(255, 242, 0)
 BLACK = RGBColor(0, 0, 0)
 
-LEFT_CATS = [
-    "国家药物临床试验政策法规的遵循",
-    "伦理委员会审核要求的遵循",
-    "知情同意书（ICF）的签署和记录",
-    "原始文件的建立、内容和记录",
-    "门诊/住院HIS、LIS、PACS等系统数据溯源",
-    "方案依从性",
-    "药物疗效/研究评价指标的评估",
-]
-RIGHT_CATS = [
-    "安全性信息评估，记录与报告",
-    "CRF填写（时效性、一致性、溯源性、完整性）",
-    "试验用药品管理",
-    "生物样本管理",
-    "临床研究必须文件",
-    "申办方/CRO职责",
-    "其他",
-]
-
-PLACEHOLDER_TEXTS = [
-    "单击此处编辑标题",
-    "单击此处编辑副标题",
-    "Click to edit Master title style",
-    "Click to edit Master subtitle style",
-]
-
+LEFT_CATS = ["国家药物临床试验政策法规的遵循","伦理委员会审核要求的遵循","知情同意书（ICF）的签署和记录","原始文件的建立、内容和记录","门诊/住院HIS、LIS、PACS等系统数据溯源","方案依从性","药物疗效/研究评价指标的评估"]
+RIGHT_CATS = ["安全性信息评估，记录与报告","CRF填写（时效性、一致性、溯源性、完整性）","试验用药品管理","生物样本管理","临床研究必须文件","申办方/CRO职责","其他"]
+PLACEHOLDER_TEXTS = ["单击此处编辑标题","单击此处编辑副标题","Click to edit Master title style","Click to edit Master subtitle style"]
 
 def _clean(v: Any) -> str:
     s = str(v or "").replace("\r", "\n")
@@ -63,12 +38,10 @@ def _clean(v: Any) -> str:
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
-
 def _delete_slide(prs: Presentation, index: int = 0) -> None:
     r_id = prs.slides._sldIdLst[index].rId
     prs.part.drop_rel(r_id)
     del prs.slides._sldIdLst[index]
-
 
 def _remove_shape_xml(shape) -> None:
     try:
@@ -76,16 +49,13 @@ def _remove_shape_xml(shape) -> None:
     except Exception:
         pass
 
-
 def _text(shape) -> str:
     if getattr(shape, "has_text_frame", False):
         return _clean(shape.text)
     return ""
 
-
 def _is_placeholder_text(text: str) -> bool:
     return any(p in _clean(text) for p in PLACEHOLDER_TEXTS)
-
 
 def _copy_rels(src_part, dest_part) -> dict[str, str]:
     rel_map = {}
@@ -102,16 +72,13 @@ def _copy_rels(src_part, dest_part) -> dict[str, str]:
             pass
     return rel_map
 
-
 def _remap_relationship_ids(xml_el, rel_map: dict[str, str]) -> None:
     for el in xml_el.iter():
         for attr, val in list(el.attrib.items()):
             if val in rel_map:
                 el.attrib[attr] = rel_map[val]
 
-
 def _copy_slide(prs: Presentation, src_no: int):
-    """按模板页复制：保留源页版式背景，删除自动占位符，只复制源页自身内容。"""
     source = prs.slides[src_no - 1]
     dest = prs.slides.add_slide(source.slide_layout)
     for shp in list(dest.shapes):
@@ -128,54 +95,17 @@ def _copy_slide(prs: Presentation, src_no: int):
             pass
     return dest
 
-
 def _remove_original_template_slides(prs: Presentation, original_count: int) -> None:
     for _ in range(original_count):
         _delete_slide(prs, 0)
 
-
 def _tables(slide):
     return [shp.table for shp in slide.shapes if getattr(shp, "has_table", False)]
-
 
 def _slide_text(slide) -> str:
     return "\n".join(_text(shp) for shp in slide.shapes if getattr(shp, "has_text_frame", False))
 
-
 def _has_meaningful_non_text_content(slide) -> bool:
-    """保留图片页、图形页、装饰页，避免把 Q&A 这类图片主视觉页误删。"""
-    for shp in slide.shapes:
-        try:
-            if getattr(shp, "has_table", False):
-                return True
-            if getattr(shp, "has_text_frame", False):
-                if not _is_placeholder_text(_text(shp)) and _clean(_text(shp)):
-                    return True
-                continue
-            return True
-        except Exception:
-            continue
-    return False
-
-
-def _has_meaningful_non_text_content(slide) -> bool:
-    """保留图片页、图形页、装饰页，避免把 Q&A 这类图片主视觉页误删。"""
-    for shp in slide.shapes:
-        try:
-            if getattr(shp, "has_table", False):
-                return True
-            if getattr(shp, "has_text_frame", False):
-                if not _is_placeholder_text(_text(shp)) and _clean(_text(shp)):
-                    return True
-                continue
-            return True
-        except Exception:
-            continue
-    return False
-
-
-def _has_meaningful_non_text_content(slide) -> bool:
-    """保留图片页、图形页、装饰页，避免把 Q&A 这类图片主视觉页误删。"""
     for shp in slide.shapes:
         try:
             if getattr(shp, "has_table", False):
@@ -200,7 +130,6 @@ def _remove_template_empty_slides(prs: Presentation) -> None:
         if not meaningful and not _has_meaningful_non_text_content(slide):
             _delete_slide(prs, idx)
 
-
 def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
     for shp in list(slide.shapes):
         try:
@@ -214,9 +143,7 @@ def _remove_text_shapes(slide, keep_keywords: tuple[str, ...] = ()) -> None:
         except Exception:
             pass
 
-
 def _clear_issue_content(slide) -> None:
-    """清空问题页模板中的旧文字和旧表格，只保留背景、边框等视觉元素。"""
     for shp in list(slide.shapes):
         try:
             if getattr(shp, "has_table", False) or getattr(shp, "has_text_frame", False):
@@ -224,10 +151,7 @@ def _clear_issue_content(slide) -> None:
         except Exception:
             pass
 
-
-def _add_textbox(slide, x: float, y: float, w: float, h: float, text: str,
-                 font_size: int, bold: bool, color: RGBColor,
-                 align=PP_ALIGN.LEFT):
+def _add_textbox(slide, x: float, y: float, w: float, h: float, text: str, font_size: int, bold: bool, color: RGBColor, align=PP_ALIGN.LEFT):
     box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = box.text_frame
     tf.clear()
@@ -246,9 +170,7 @@ def _add_textbox(slide, x: float, y: float, w: float, h: float, text: str,
     run.font.color.rgb = color
     return box
 
-
-def _set_cell(cell, text: str, font_size: int = 12, bold: bool | None = None,
-              align=PP_ALIGN.LEFT) -> None:
+def _set_cell(cell, text: str, font_size: int = 12, bold: bool | None = None, align=PP_ALIGN.LEFT) -> None:
     cell.text = _clean(text) or "—"
     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
     cell.margin_left = Pt(4)
@@ -262,7 +184,6 @@ def _set_cell(cell, text: str, font_size: int = 12, bold: bool | None = None,
             r.font.size = Pt(font_size)
             if bold is not None:
                 r.font.bold = bold
-
 
 def _split_text(text: str, limit: int) -> list[str]:
     text = _clean(text)
@@ -286,7 +207,6 @@ def _split_text(text: str, limit: int) -> list[str]:
         out.append(buf)
     return out or ["—"]
 
-
 def _meaningful_text(value: Any) -> bool:
     t = _clean(value)
     if not t or t in {"—", "-", "无", "NA", "N/A"}:
@@ -295,30 +215,29 @@ def _meaningful_text(value: Any) -> bool:
         return False
     return len(re.sub(r"[\s\-—_：:|]+", "", t)) > 0
 
-
 def _paginate_issue(issue: dict) -> list[dict]:
-    title = issue.get("title", "")
-    basis = issue.get("basis", "—")
-    desc = issue.get("description", "—")
+    title = _clean(issue.get("title", ""))
+    basis = _clean(issue.get("basis", "—"))
+    desc = _clean(issue.get("description", "—"))
+    combined = (title + "\n\n" + desc).strip() if title and title not in desc else desc
     if not _meaningful_text(title) and not _meaningful_text(basis) and not _meaningful_text(desc):
         return []
-    basis_parts = _split_text(basis, 360) if _meaningful_text(basis) else ["—"]
-    desc_parts = _split_text(desc, 680) if _meaningful_text(desc) else ["—"]
+    basis_parts = _split_text(basis, 430) if _meaningful_text(basis) else ["—"]
+    desc_parts = _split_text(combined, 1150) if _meaningful_text(combined) else ["—"]
     total = max(len(basis_parts), len(desc_parts))
     pages = []
     for i in range(total):
         x = dict(issue)
         x["basis"] = basis_parts[i] if i < len(basis_parts) else "—"
         x["description"] = desc_parts[i] if i < len(desc_parts) else "—"
+        x["title"] = ""
         x["_sub_page"] = i + 1
         x["_sub_total"] = total
         pages.append(x)
     return pages
 
-
 def _has_issue_content(issue: dict) -> bool:
     return _meaningful_text(issue.get("title", "")) or _meaningful_text(issue.get("basis", "")) or _meaningful_text(issue.get("description", ""))
-
 
 def _render_cover(slide, context: dict) -> None:
     _remove_text_shapes(slide)
@@ -332,7 +251,6 @@ def _render_cover(slide, context: dict) -> None:
     _add_textbox(slide, 0.25, 4.12, 12.70, 0.55, "中心稽查末次会议", 28, True, YELLOW, PP_ALIGN.LEFT)
     _add_textbox(slide, 0.35, 5.13, 12.30, 0.35, f"时间：{audit_date}", 14, True, WHITE, PP_ALIGN.LEFT)
 
-
 def _render_overview(slide, context: dict) -> None:
     meta = context.get("meta", {})
     tables = _tables(slide)
@@ -340,38 +258,29 @@ def _render_overview(slide, context: dict) -> None:
         return
     tbl = tables[0]
     project = _clean(meta.get("project_name", "—"))
-    sponsor = _clean(meta.get("sponsor", "—"))
+    sponsor = _clean(meta.get("sponsor", ""))
     pi = _clean(meta.get("pi", "—"))
     center = _clean(meta.get("center_name", "—"))
     enrollment = _clean(meta.get("enrollment", "—"))
     audit_date = _clean(meta.get("audit_date", "—"))
     auditor = _clean(meta.get("auditor", "—"))
     subjects = "、".join(context.get("audited_subjects") or ["—"])
-    rows = [
-        [(0, 0, "方案名称", 16, True), (0, 1, project, 16, False)],
-        [(1, 0, "申办者", 16, True), (1, 1, sponsor, 16, False), (1, 2, "PI", 16, True), (1, 3, pi, 16, False)],
-        [(2, 0, "中心名称", 16, True), (2, 1, center, 16, False), (2, 2, "中心入组\n情况", 16, True), (2, 3, enrollment, 16, False)],
-        [(3, 0, "稽查时间", 16, True), (3, 1, audit_date, 16, False), (3, 2, "稽查员", 16, True), (3, 3, auditor, 16, False)],
-        [(4, 0, f"本次稽查{len(context.get('audited_subjects') or []) or 'x'}\n例受试者", 16, True), (4, 1, subjects, 16, False)],
-    ]
+    rows = [[(0,0,"方案名称",16,True),(0,1,project,16,False)],[(1,0,"申办者",16,True),(1,1,sponsor,16,False),(1,2,"PI",16,True),(1,3,pi,16,False)],[(2,0,"中心名称",16,True),(2,1,center,16,False),(2,2,"中心入组\n情况",16,True),(2,3,enrollment,16,False)],[(3,0,"稽查时间",16,True),(3,1,audit_date,16,False),(3,2,"稽查员",16,True),(3,3,auditor,16,False)],[(4,0,f"本次稽查{len(context.get('audited_subjects') or []) or 'x'}\n例受试者",16,True),(4,1,subjects,16,False)]]
     for group in rows:
-        for r, c, text, size, bold in group:
+        for r,c,text,size,bold in group:
             if r < len(tbl.rows) and c < len(tbl.columns):
-                _set_cell(tbl.cell(r, c), text, size, bold, PP_ALIGN.CENTER if c in (0, 2) else PP_ALIGN.LEFT)
-
+                _set_cell(tbl.cell(r,c), text, size, bold, PP_ALIGN.CENTER if c in (0,2) else PP_ALIGN.LEFT)
 
 def _render_counts(slide, context: dict) -> None:
     counts = context.get("summary", {})
     tables = _tables(slide)
     for tbl, cats in zip(tables[:2], [LEFT_CATS, RIGHT_CATS]):
-        _set_cell(tbl.cell(0, 0), "分类", 12, True, PP_ALIGN.CENTER)
-        _set_cell(tbl.cell(0, 1), "数量", 12, True, PP_ALIGN.CENTER)
+        _set_cell(tbl.cell(0,0), "分类", 12, True, PP_ALIGN.CENTER)
+        _set_cell(tbl.cell(0,1), "数量", 12, True, PP_ALIGN.CENTER)
         for i, cat in enumerate(cats, start=1):
-            if i >= len(tbl.rows):
-                break
-            _set_cell(tbl.cell(i, 0), cat, 12, False, PP_ALIGN.LEFT)
-            _set_cell(tbl.cell(i, 1), str(counts.get(cat, 0) or "—"), 12, True, PP_ALIGN.CENTER)
-
+            if i >= len(tbl.rows): break
+            _set_cell(tbl.cell(i,0), cat, 12, False, PP_ALIGN.LEFT)
+            _set_cell(tbl.cell(i,1), str(counts.get(cat,0) or "—"), 12, True, PP_ALIGN.CENTER)
 
 def _render_issue(slide, category: str, issue: dict, idx: int, total: int) -> None:
     _clear_issue_content(slide)
@@ -380,34 +289,28 @@ def _render_issue(slide, category: str, issue: dict, idx: int, total: int) -> No
     tag = f"（{idx}/{total}）" if total > 1 else ""
     cont = f"  续{sub_page}/{sub_total}" if sub_total > 1 else ""
     page_title = f"问题分类：{category}{tag}{cont}"
-    overview = _clean(issue.get("title", "")) or category
     basis = _clean(issue.get("basis", "—"))
     desc = _clean(issue.get("description", "—"))
-
     _add_textbox(slide, 0.70, 0.52, 12.0, 0.45, page_title, 20, True, BLACK, PP_ALIGN.LEFT)
-    rows = [("问题概述", overview)]
+    rows = []
     if _meaningful_text(basis) and basis != "—":
-        rows.append(("依据", basis))
+        rows.append(("问题依据", basis))
     rows.append(("问题描述", desc))
-
     shape = slide.shapes.add_table(len(rows), 2, Inches(0.65), Inches(1.22), Inches(12.05), Inches(5.45))
     tbl = shape.table
     tbl.columns[0].width = Inches(1.05)
     tbl.columns[1].width = Inches(11.00)
-    heights = [0.75, 4.70] if len(rows) == 2 else [0.65, 1.55, 3.25]
+    heights = [1.55, 3.90] if len(rows) == 2 else [5.45]
     for i, h in enumerate(heights[:len(rows)]):
         tbl.rows[i].height = Inches(h)
     for r, (label, value) in enumerate(rows):
-        _set_cell(tbl.cell(r, 0), label, 14, True, PP_ALIGN.CENTER)
+        _set_cell(tbl.cell(r,0), label, 14, True, PP_ALIGN.CENTER)
         size = 11 if label == "问题描述" else 10
-        _set_cell(tbl.cell(r, 1), value, size, False, PP_ALIGN.LEFT)
-
+        _set_cell(tbl.cell(r,1), value, size, False, PP_ALIGN.LEFT)
 
 def _copy_if_exists(prs: Presentation, src_no: int | None):
-    if src_no and 1 <= src_no <= len(prs.slides):
-        return _copy_slide(prs, src_no)
+    if src_no and 1 <= src_no <= len(prs.slides): return _copy_slide(prs, src_no)
     return None
-
 
 def render_ppt(context: dict, output_path: str | Path, template_path: str | Path | None = None):
     template = Path(template_path or DEFAULT_TEMPLATE_PATH)
@@ -415,40 +318,27 @@ def render_ppt(context: dict, output_path: str | Path, template_path: str | Path
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not template.exists() or template.stat().st_size < 1024 * 100:
         raise FileNotFoundError(f"未找到有效PPT模板：{template}。请在页面先上传你的稽查总结会模板。")
-
     prs = Presentation(str(template))
     original_count = len(prs.slides)
     if original_count < SLIDE_COUNTS:
         raise RuntimeError(f"模板页数不足：当前 {original_count} 页，至少需要 {SLIDE_COUNTS} 页。请上传完整的稽查总结会模板。")
-
     qa_slide_no = original_count - 1 if original_count >= 2 else None
     ending_slide_no = original_count if original_count >= 1 else None
     issue_template_no = SLIDE_ISSUE if original_count >= SLIDE_ISSUE else SLIDE_COUNTS
-
     slide = _copy_slide(prs, SLIDE_COVER); _render_cover(slide, context)
-    _copy_slide(prs, SLIDE_THANKS)
-    _copy_slide(prs, SLIDE_TOC)
-    _copy_slide(prs, SLIDE_PART1)
+    _copy_slide(prs, SLIDE_THANKS); _copy_slide(prs, SLIDE_TOC); _copy_slide(prs, SLIDE_PART1)
     slide = _copy_slide(prs, SLIDE_OVERVIEW); _render_overview(slide, context)
-    _copy_slide(prs, SLIDE_SCOPE)
-    _copy_if_exists(prs, SLIDE_COMMON)
-    _copy_if_exists(prs, SLIDE_INDIVIDUAL)
-    _copy_slide(prs, SLIDE_PART2)
+    _copy_slide(prs, SLIDE_SCOPE); _copy_if_exists(prs, SLIDE_COMMON); _copy_if_exists(prs, SLIDE_INDIVIDUAL); _copy_slide(prs, SLIDE_PART2)
     slide = _copy_slide(prs, SLIDE_COUNTS); _render_counts(slide, context)
-
     for cat in context.get("standard_categories", []):
         cat_issues = [x for x in context.get("issues", []) if x.get("category") == cat and _has_issue_content(x)]
-        if not cat_issues:
-            continue
+        if not cat_issues: continue
         for i, issue in enumerate(cat_issues, start=1):
             for page_issue in _paginate_issue(issue):
-                if not _has_issue_content(page_issue):
-                    continue
+                if not _has_issue_content(page_issue): continue
                 slide = _copy_slide(prs, issue_template_no)
                 _render_issue(slide, cat, page_issue, i, len(cat_issues))
-
-    _copy_if_exists(prs, qa_slide_no)
-    _copy_if_exists(prs, ending_slide_no)
+    _copy_if_exists(prs, qa_slide_no); _copy_if_exists(prs, ending_slide_no)
     _remove_original_template_slides(prs, original_count)
     _remove_template_empty_slides(prs)
     prs.save(str(output_path))
