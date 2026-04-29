@@ -6,7 +6,6 @@ import openpyxl
 
 STANDARD_CATEGORIES = ["国家药物临床试验政策法规的遵循","伦理委员会审核要求的遵循","知情同意书（ICF）的签署和记录","原始文件的建立、内容和记录","门诊/住院HIS、LIS、PACS等系统数据溯源","方案依从性","药物疗效/研究评价指标的评估","安全性信息评估，记录与报告","CRF填写（时效性、一致性、溯源性、完整性）","试验用药品管理","生物样本管理","临床研究必须文件","申办方/CRO职责","其他"]
 ALIASES={"法规":"国家药物临床试验政策法规的遵循","伦理":"伦理委员会审核要求的遵循","知情同意":"知情同意书（ICF）的签署和记录","icf":"知情同意书（ICF）的签署和记录","源文件":"原始文件的建立、内容和记录","原始文件":"原始文件的建立、内容和记录","原始记录":"原始文件的建立、内容和记录","his":"门诊/住院HIS、LIS、PACS等系统数据溯源","lis":"门诊/住院HIS、LIS、PACS等系统数据溯源","pacs":"门诊/住院HIS、LIS、PACS等系统数据溯源","方案依从":"方案依从性","方案偏离":"方案依从性","疗效":"药物疗效/研究评价指标的评估","recist":"药物疗效/研究评价指标的评估","肿瘤评估":"药物疗效/研究评价指标的评估","安全性":"安全性信息评估，记录与报告","ae":"安全性信息评估，记录与报告","sae":"安全性信息评估，记录与报告","crf":"CRF填写（时效性、一致性、溯源性、完整性）","edc":"CRF填写（时效性、一致性、溯源性、完整性）","药品":"试验用药品管理","药物":"试验用药品管理","样本":"生物样本管理","必须文件":"临床研究必须文件","研究者文件夹":"临床研究必须文件","cro":"申办方/CRO职责","申办方":"申办方/CRO职责","其他":"其他"}
-BAD_META_VALUES=["病例报告表","研究者应当","源文件一致","药物临床试验质量管理规范","第二十五条","RECIST","管理手册"]
 STOP_WORDS=["审核","回复","签字","日期","备注","说明","填表","批准","确认"]
 
 def clean_text(v:Any)->str:
@@ -27,7 +26,6 @@ def normalize_category(raw:str)->str:
     return "其他"
 def rows_from_ws(ws): return [[clean_text(c) for c in row] for row in ws.iter_rows(values_only=True)]
 def row_text(row): return " ".join(x for x in row if x)
-def is_bad_meta(v:str)->bool: return any(x in clean_text(v) for x in BAD_META_VALUES) or len(clean_text(v))>120
 def find_label_value(rows, labels, allow_long=False):
     labs=[norm(x) for x in labels]
     for row in rows:
@@ -36,9 +34,9 @@ def find_label_value(rows, labels, allow_long=False):
             nc=norm(cell)
             if any(lab==nc or lab in nc for lab in labs):
                 m=re.match(r"^.*?[：:]\s*(.+)$",cell)
-                if m and clean_text(m.group(1)) and (allow_long or not is_bad_meta(m.group(1))): return clean_text(m.group(1))
+                if m and clean_text(m.group(1)): return clean_text(m.group(1))
                 for j in range(i+1,min(len(row),i+8)):
-                    if row[j] and norm(row[j]) not in labs and (allow_long or not is_bad_meta(row[j])): return row[j]
+                    if row[j] and norm(row[j]) not in labs: return row[j]
     return ""
 def extract_protocol(text):
     m=re.search(r"(?<![A-Z0-9])([A-Z]{2,}(?:-[A-Z0-9]+)+)(?![A-Z0-9-])",clean_text(text),flags=re.I)
@@ -53,42 +51,53 @@ def extract_subject_ids(text):
 def extract_title(desc,category):
     lines=[x.strip("—- ").strip() for x in clean_text(desc).splitlines() if x.strip()]
     for line in lines[:5]:
-        if 4<=len(line)<=120 and not any(w in line for w in STOP_WORDS): return line
+        if 4<=len(line)<=160 and not any(w in line for w in STOP_WORDS): return line
     return category
 def find_col(header,cands):
     for idx,h in enumerate(header):
         nh=norm(h)
         for c in cands:
             nc=norm(c)
-            if nc and (nc in nh or nh in nc): return idx
+            if nc and (nc==nh or nc in nh or nh in nc): return idx
     return -1
 def is_header_row(row):
-    txt=norm(row_text(row)); return ("问题分类" in txt or "问题类别" in txt or "分类" in txt) and ("问题描述" in txt or "问题概述" in txt or "描述" in txt or "稽查发现" in txt)
+    txt=norm(row_text(row))
+    has_cat=("问题分类" in txt or "问题类别" in txt or "分类" in txt)
+    has_desc=("问题描述" in txt or "问题概述" in txt or "稽查发现" in txt)
+    has_basis=("稽查依据" in txt or "依据" in txt or "法规依据" in txt)
+    return has_cat and (has_desc or has_basis)
+
+def basis_like(s):
+    s=clean_text(s)
+    return any(k in s for k in ["药物临床试验质量管理规范","第二十五条","RECIST","管理手册","方案","ICH","GCP","核查要点","依据"])
+def desc_like(s):
+    s=clean_text(s)
+    return len(s)>=4 and not basis_like(s)
 
 def pick_desc_basis_from_row(row,cat_idx,header=None):
-    # 优先按真实表头定位：问题概述/稽查发现/问题描述 与 依据/稽查依据
+    cells=[clean_text(x) for x in row]
     desc=""; basis="—"
     if header:
-        di=find_col(header,["问题概述","问题描述","稽查发现","描述","总结描述"])
-        bi=find_col(header,["稽查依据","依据","法规依据","参考依据"])
-        if 0<=di<len(row): desc=clean_text(row[di])
-        if 0<=bi<len(row): basis=clean_text(row[bi]) or "—"
-    # 若表头定位失败，按分类后面的列顺序读：概述通常为第一个短/中长文本，依据为含法规关键词的文本
-    cells=[clean_text(x) for x in row]
-    candidates=[cells[i] for i in range(cat_idx+1,min(len(cells),cat_idx+10)) if cells[i]]
+        # 严格优先读取“问题描述”列，其次问题概述/稽查发现；依据严格读取“稽查依据/依据”列。
+        desc_col=find_col(header,["问题描述"])
+        if desc_col<0: desc_col=find_col(header,["问题概述","稽查发现","总结描述"])
+        basis_col=find_col(header,["稽查依据","依据","法规依据","参考依据"])
+        if 0<=desc_col<len(cells): desc=clean_text(cells[desc_col])
+        if 0<=basis_col<len(cells): basis=clean_text(cells[basis_col]) or "—"
+    candidates=[cells[i] for i in range(cat_idx+1,min(len(cells),cat_idx+12)) if cells[i]]
     if not desc:
         for x in candidates:
-            if len(x)>=4 and not any(k in x for k in ["药物临床试验质量管理规范","第二十五条","RECIST","管理手册","ICH","GCP"]):
-                desc=x; break
+            if desc_like(x): desc=x; break
     if not desc and candidates: desc=candidates[0]
     if basis in ["","—"]:
         for x in candidates:
-            if x!=desc and any(k in x for k in ["药物临床试验质量管理规范","第二十五条","RECIST","管理手册","方案","ICH","GCP","核查要点"]):
-                basis=re.sub(r"^依据[:：]?","",x).strip() or "—"; break
+            if x!=desc and basis_like(x): basis=re.sub(r"^依据[:：]?","",x).strip() or "—"; break
     return desc,basis
 
 def parse_table_after_header(rows, header_idx):
-    header=rows[header_idx]; ci=find_col(header,["问题分类","问题类别","分类","检查内容"]); si=find_col(header,["级别","问题级别","严重程度","风险等级"])
+    header=rows[header_idx]
+    ci=find_col(header,["问题分类","问题类别","分类","检查内容"])
+    si=find_col(header,["级别","问题级别","严重程度","风险等级"])
     issues=[]; current_cat=""
     for row in rows[header_idx+1:]:
         if not any(row): continue
@@ -101,7 +110,8 @@ def parse_table_after_header(rows, header_idx):
         if category=="其他" and norm(raw_cat)!="其他": continue
         desc,basis=pick_desc_basis_from_row(row,ci if ci>=0 else 0,header)
         if not desc or len(desc)<4: continue
-        sev_raw=norm(row[si] if 0<=si<len(row) else ""); sev="高" if sev_raw in ["高","major","high"] else ("一般" if sev_raw in ["一般","低","low","minor"] else "中")
+        sev_raw=norm(row[si] if 0<=si<len(row) else "")
+        sev="高" if sev_raw in ["高","major","high"] else ("一般" if sev_raw in ["一般","低","low","minor"] else "中")
         issues.append({"category":category,"title":extract_title(desc,category),"severity":sev,"subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
     return issues
 
@@ -128,16 +138,10 @@ def parse_issue_table(rows):
             if found: return found
     return parse_summary_rows(rows)
 
-def extract_sponsor_from_text(rows):
-    txt="\n".join(row_text(r) for r in rows if any(r))
-    m=re.search(r"受申办方委托\s*([^\n，,。]+(?:公司|医院|中心|集团|有限责任公司|股份有限公司))",txt)
-    return clean_text(m.group(1)) if m else ""
 def extract_meta(rows,file_name):
     composite_project=find_label_value(rows,["项目名称/方案编号","项目名称","方案名称","试验名称"],allow_long=True)
     protocol=extract_protocol(file_name) or extract_protocol(composite_project)
     project_name=clean_text(composite_project.replace(protocol,"").strip("/ -_：:")) if protocol else composite_project
-    sponsor=find_label_value(rows,["申办者","申办方","委托方"],allow_long=False)
-    if not sponsor: sponsor=extract_sponsor_from_text(rows)
     center_raw=find_label_value(rows,["研究中心名称/中心编号/研究者姓名","研究中心名称","中心名称","机构名称"],allow_long=False)
     center=""; center_no=""; pi=""
     if center_raw:
@@ -156,7 +160,8 @@ def extract_meta(rows,file_name):
     if not center_no:
         m=re.search(r"[（(](\d{1,3})(?:中心)?[）)]",file_name)
         if m: center_no=m.group(1)
-    return {"protocol_no":protocol or "—","project_name":project_name or "—","sponsor":sponsor or "—","center_name":center or "—","center_no":center_no or "","pi":pi or "—","audit_date":audit_date or "—","audit_company":audit_company or "—","enrollment":enrollment or "—","audit_note":audit_note or ""}
+    # 申办者按用户要求固定留空，避免误提取依据或封面说明。
+    return {"protocol_no":protocol or "—","project_name":project_name or "—","sponsor":"","center_name":center or "—","center_no":center_no or "","pi":pi or "—","audit_date":audit_date or "—","audit_company":audit_company or "—","enrollment":enrollment or "—","audit_note":audit_note or ""}
 
 def parse_excel(excel_path:str|Path)->dict[str,Any]:
     excel_path=Path(excel_path); wb=openpyxl.load_workbook(excel_path,data_only=True)
