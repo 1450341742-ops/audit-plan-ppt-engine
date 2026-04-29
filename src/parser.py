@@ -48,11 +48,6 @@ def extract_subject_ids(text):
             v=clean_text(m).upper()
             if v and v not in hits: hits.append(v)
     return hits
-def extract_title(desc,category):
-    lines=[x.strip("—- ").strip() for x in clean_text(desc).splitlines() if x.strip()]
-    for line in lines[:5]:
-        if 4<=len(line)<=160 and not any(w in line for w in STOP_WORDS): return line
-    return category
 def find_col(header,cands):
     for idx,h in enumerate(header):
         nh=norm(h)
@@ -62,37 +57,35 @@ def find_col(header,cands):
     return -1
 def is_header_row(row):
     txt=norm(row_text(row))
-    has_cat=("问题分类" in txt or "问题类别" in txt or "分类" in txt)
-    has_desc=("问题描述" in txt or "问题概述" in txt or "稽查发现" in txt)
-    has_basis=("稽查依据" in txt or "依据" in txt or "法规依据" in txt)
-    return has_cat and (has_desc or has_basis)
-
+    return ("问题分类" in txt or "问题类别" in txt or "分类" in txt) and ("问题描述" in txt or "总结描述" in txt or "问题概述" in txt or "稽查依据" in txt or "依据" in txt)
 def basis_like(s):
     s=clean_text(s)
     return any(k in s for k in ["药物临床试验质量管理规范","第二十五条","RECIST","管理手册","方案","ICH","GCP","核查要点","依据"])
-def desc_like(s):
-    s=clean_text(s)
-    return len(s)>=4 and not basis_like(s)
+def desc_like(s): return len(clean_text(s))>=4 and not basis_like(s)
 
-def pick_desc_basis_from_row(row,cat_idx,header=None):
+def pick_fields_from_row(row,cat_idx,header=None):
     cells=[clean_text(x) for x in row]
-    desc=""; basis="—"
+    summary=""; desc=""; basis="—"
     if header:
-        # 严格优先读取“问题描述”列，其次问题概述/稽查发现；依据严格读取“稽查依据/依据”列。
+        summary_col=find_col(header,["总结描述","问题概述","概述"])
         desc_col=find_col(header,["问题描述"])
-        if desc_col<0: desc_col=find_col(header,["问题概述","稽查发现","总结描述"])
         basis_col=find_col(header,["稽查依据","依据","法规依据","参考依据"])
+        if 0<=summary_col<len(cells): summary=clean_text(cells[summary_col])
         if 0<=desc_col<len(cells): desc=clean_text(cells[desc_col])
         if 0<=basis_col<len(cells): basis=clean_text(cells[basis_col]) or "—"
     candidates=[cells[i] for i in range(cat_idx+1,min(len(cells),cat_idx+12)) if cells[i]]
-    if not desc:
+    if not summary:
         for x in candidates:
-            if desc_like(x): desc=x; break
-    if not desc and candidates: desc=candidates[0]
+            if desc_like(x) and len(x)<=220: summary=x; break
+    if not desc:
+        non_basis=[x for x in candidates if desc_like(x)]
+        if non_basis: desc=max(non_basis,key=len)
     if basis in ["","—"]:
         for x in candidates:
-            if x!=desc and basis_like(x): basis=re.sub(r"^依据[:：]?","",x).strip() or "—"; break
-    return desc,basis
+            if x not in [summary,desc] and basis_like(x): basis=re.sub(r"^依据[:：]?","",x).strip() or "—"; break
+    if not desc: desc=summary
+    if not summary: summary=desc
+    return summary,desc,basis
 
 def parse_table_after_header(rows, header_idx):
     header=rows[header_idx]
@@ -108,11 +101,11 @@ def parse_table_after_header(rows, header_idx):
         if raw_cat: current_cat=raw_cat
         category=normalize_category(raw_cat or current_cat or merged)
         if category=="其他" and norm(raw_cat)!="其他": continue
-        desc,basis=pick_desc_basis_from_row(row,ci if ci>=0 else 0,header)
+        summary,desc,basis=pick_fields_from_row(row,ci if ci>=0 else 0,header)
         if not desc or len(desc)<4: continue
         sev_raw=norm(row[si] if 0<=si<len(row) else "")
         sev="高" if sev_raw in ["高","major","high"] else ("一般" if sev_raw in ["一般","低","low","minor"] else "中")
-        issues.append({"category":category,"title":extract_title(desc,category),"severity":sev,"subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
+        issues.append({"category":category,"title":summary,"severity":sev,"subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
     return issues
 
 def parse_summary_rows(rows):
@@ -126,9 +119,9 @@ def parse_summary_rows(rows):
             c=normalize_category(cell)
             if c!="其他" or norm(cell)=="其他": cat_idx=idx; cat=c; break
         if cat_idx<0: continue
-        desc,basis=pick_desc_basis_from_row(cells,cat_idx,None)
+        summary,desc,basis=pick_fields_from_row(cells,cat_idx,None)
         if not desc or len(desc)<4: continue
-        issues.append({"category":cat,"title":extract_title(desc,cat),"severity":"中","subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
+        issues.append({"category":cat,"title":summary,"severity":"中","subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
     return issues
 
 def parse_issue_table(rows):
@@ -160,7 +153,6 @@ def extract_meta(rows,file_name):
     if not center_no:
         m=re.search(r"[（(](\d{1,3})(?:中心)?[）)]",file_name)
         if m: center_no=m.group(1)
-    # 申办者按用户要求固定留空，避免误提取依据或封面说明。
     return {"protocol_no":protocol or "—","project_name":project_name or "—","sponsor":"","center_name":center or "—","center_no":center_no or "","pi":pi or "—","audit_date":audit_date or "—","audit_company":audit_company or "—","enrollment":enrollment or "—","audit_note":audit_note or ""}
 
 def parse_excel(excel_path:str|Path)->dict[str,Any]:
