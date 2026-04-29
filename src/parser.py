@@ -62,6 +62,12 @@ def basis_like(s):
     s=clean_text(s)
     return any(k in s for k in ["药物临床试验质量管理规范","第二十五条","RECIST","管理手册","方案","ICH","GCP","核查要点","依据"])
 def desc_like(s): return len(clean_text(s))>=4 and not basis_like(s)
+def merge_summary_desc(summary, desc):
+    summary=clean_text(summary); desc=clean_text(desc)
+    if summary and desc:
+        if summary in desc: return desc
+        return summary + "\n\n" + desc
+    return desc or summary
 
 def pick_fields_from_row(row,cat_idx,header=None):
     cells=[clean_text(x) for x in row]
@@ -85,7 +91,8 @@ def pick_fields_from_row(row,cat_idx,header=None):
             if x not in [summary,desc] and basis_like(x): basis=re.sub(r"^依据[:：]?","",x).strip() or "—"; break
     if not desc: desc=summary
     if not summary: summary=desc
-    return summary,desc,basis
+    merged_desc=merge_summary_desc(summary, desc)
+    return summary,merged_desc,basis
 
 def parse_table_after_header(rows, header_idx):
     header=rows[header_idx]
@@ -105,7 +112,7 @@ def parse_table_after_header(rows, header_idx):
         if not desc or len(desc)<4: continue
         sev_raw=norm(row[si] if 0<=si<len(row) else "")
         sev="高" if sev_raw in ["高","major","high"] else ("一般" if sev_raw in ["一般","低","low","minor"] else "中")
-        issues.append({"category":category,"title":summary,"severity":sev,"subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
+        issues.append({"category":category,"title":"","summary":summary,"severity":sev,"subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
     return issues
 
 def parse_summary_rows(rows):
@@ -121,7 +128,7 @@ def parse_summary_rows(rows):
         if cat_idx<0: continue
         summary,desc,basis=pick_fields_from_row(cells,cat_idx,None)
         if not desc or len(desc)<4: continue
-        issues.append({"category":cat,"title":summary,"severity":"中","subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
+        issues.append({"category":cat,"title":"","summary":summary,"severity":"中","subject_ids":extract_subject_ids(merged),"basis":basis or "—","description":desc,"full_text":desc})
     return issues
 
 def parse_issue_table(rows):
@@ -162,7 +169,7 @@ def parse_excel(excel_path:str|Path)->dict[str,Any]:
         rows=rows_from_ws(ws); all_rows.extend(rows); issues.extend(parse_issue_table(rows))
     uniq=[]; seen=set()
     for it in issues:
-        key=(it["category"],it["title"],it["basis"],it["description"])
+        key=(it["category"],it["basis"],it["description"])
         if key not in seen: seen.add(key); uniq.append(it)
     issues=uniq; meta=extract_meta(all_rows,excel_path.name)
     counts={c:0 for c in STANDARD_CATEGORIES}
