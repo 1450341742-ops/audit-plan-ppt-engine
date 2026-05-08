@@ -54,9 +54,31 @@ def _safe_parse_json(text: str) -> list[dict]:
     return rows
 
 
+def _get_ai_runtime() -> tuple[str, str, str]:
+    """Support OpenAI and DingTalk/DEAP OpenAI-compatible configs."""
+    api_key = (
+        _get_cfg("DINGTALK_API_KEY")
+        or _get_cfg("DEAP_API_KEY")
+        or _get_cfg("OPENAI_API_KEY")
+        or _get_cfg("AI_API_KEY")
+    )
+    base_url = (
+        _get_cfg("DINGTALK_BASE_URL")
+        or _get_cfg("DEAP_BASE_URL")
+        or _get_cfg("OPENAI_BASE_URL")
+    )
+    model = (
+        _get_cfg("DINGTALK_MODEL")
+        or _get_cfg("DEAP_MODEL")
+        or _get_cfg("OPENAI_MODEL")
+        or "gpt-4o-mini"
+    )
+    return api_key, base_url, model
+
+
 def generate_ai_top5(context: dict) -> list[dict]:
     """Return AI-generated TOP5 risk rows. Empty list means fallback to rule summary."""
-    api_key = _get_cfg("OPENAI_API_KEY") or _get_cfg("AI_API_KEY")
+    api_key, base_url, model = _get_ai_runtime()
     if not api_key:
         return []
 
@@ -65,8 +87,6 @@ def generate_ai_top5(context: dict) -> list[dict]:
     except Exception:
         return []
 
-    base_url = _get_cfg("OPENAI_BASE_URL")
-    model = _get_cfg("OPENAI_MODEL", "gpt-4o-mini")
     client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
 
     issues_text = _compact_issues(context)
@@ -83,20 +103,23 @@ def generate_ai_top5(context: dict) -> list[dict]:
 3. 核查应对建议：按“立即行动/证据准备/系统改进或演练”写，必须可执行。
 4. 5项之间不能重复，不能每项都写同样的话。
 5. 每个字段控制在适合PPT表格展示的长度内。
+6. 只输出JSON，不要输出解释。
 """.strip()
 
     user_prompt = f"请根据以下中心稽查发现，生成TOP5高风险问题及核查应对建议。\n\n{issues_text}"
 
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
+        kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.15,
-            response_format={"type": "json_object"} if model.startswith("gpt-4") else None,
-        )
+            "temperature": 0.15,
+        }
+        if model.startswith("gpt-4"):
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content or ""
         try:
             obj = json.loads(content)
