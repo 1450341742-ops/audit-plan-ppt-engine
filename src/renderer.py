@@ -10,6 +10,11 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.util import Pt, Inches
 from pptx.dml.color import RGBColor
 
+try:
+    from ai_summary import generate_ai_top5
+except Exception:  # 本地调试或依赖异常时不影响规则兜底
+    generate_ai_top5 = None
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_TEMPLATE_PATH = BASE_DIR / "assets" / "template.pptx"
 
@@ -413,22 +418,22 @@ def _risk_score(issue: dict) -> int:
 def _risk_advice(category: str, text: str) -> str:
     lower_text = text.lower()
     if "知情同意" in category or "icf" in lower_text:
-        return "逐例复核ICF签署版本、签署日期/时间、签署人资质、授权委托及受试者权益告知证据；准备签署过程说明和更正/补充记录。"
+        return "立即行动：逐例复核ICF签署版本、签署日期/时间、签署人资质、授权委托及受试者权益告知证据；证据准备：签署过程说明、授权记录和更正/补充记录。"
     if "安全性" in category or "sae" in lower_text or "susar" in lower_text:
-        return "逐例核对AE/SAE从原始病历到EDC及上报系统的完整链条，确认严重性、相关性、转归、上报时限和随访闭环证据。"
+        return "立即行动：逐例核对AE/SAE从原始病历到EDC及上报系统的完整链条；证据准备：严重性、相关性、转归、上报时限和随访闭环材料。"
     if "方案依从" in category or "入排" in text or "方案偏离" in text:
-        return "围绕入排标准、访视窗口、给药/检查流程和偏离记录建立逐例核查清单，提前形成偏离判定、医学解释和CAPA闭环材料。"
+        return "立即行动：围绕入排标准、访视窗口、给药/检查流程和偏离记录建立逐例核查清单；证据准备：偏离判定、医学解释和CAPA闭环材料。"
     if "原始文件" in category or "HIS" in category or "LIS" in category or "PACS" in category:
-        return "提前完成原始病历、HIS/LIS/PACS、源文件与EDC一致性复核，标记差异原因，准备可追溯证据和研究者确认说明。"
+        return "立即行动：完成原始病历、HIS/LIS/PACS、源文件与EDC一致性复核；证据准备：差异原因、可追溯证据和研究者确认说明。"
     if "CRF" in category or "EDC" in lower_text:
-        return "导出EDC关键字段核查清单，重点复核录入及时性、逻辑一致性、Query关闭证据及源数据支持。"
+        return "立即行动：导出EDC关键字段核查清单；证据准备：录入及时性、逻辑一致性、Query关闭证据及源数据支持。"
     if "试验用药" in category:
-        return "复核药品接收、储存温度、发放、回收、清点、销毁及授权人员记录，确保账物卡一致并可追溯。"
+        return "立即行动：复核药品接收、储存温度、发放、回收、清点、销毁及授权人员记录；证据准备：账物卡一致性和温控偏差处理记录。"
     if "生物样本" in category:
-        return "复核样本采集、处理、保存、运输、交接、检测结果回传全链条，重点确认时间窗、标签、温控和偏差处理记录。"
+        return "立即行动：复核样本采集、处理、保存、运输、交接、检测结果回传全链条；证据准备：时间窗、标签、温控和偏差处理记录。"
     if "伦理" in category:
-        return "核对伦理批件、递交材料、方案/ICF版本、持续审查和安全性信息递交记录，确保版本和执行时间一致。"
-    return "按问题清单逐项准备原始证据、研究者说明、整改记录和CAPA闭环材料；对同类问题开展横向复核，避免核查现场重复暴露。"
+        return "立即行动：核对伦理批件、递交材料、方案/ICF版本、持续审查和安全性信息递交记录；证据准备：版本执行时间和递交回执。"
+    return "立即行动：按问题清单逐项准备原始证据、研究者说明、整改记录和CAPA闭环材料；系统改进：对同类问题开展横向复核，避免核查现场重复暴露。"
 
 
 def _extract_top5_risks(context: dict) -> list[dict]:
@@ -445,49 +450,71 @@ def _extract_top5_risks(context: dict) -> list[dict]:
         seen.add(key)
         full_text = f"{desc}\n{basis}"
         enriched.append({
-            "category": category,
-            "risk": _shorten(desc, 96),
-            "reason": _shorten(basis if _meaningful_text(basis) else f"该问题涉及{category}，可能影响核查对试验质量和合规性的判断。", 86),
+            "risk": f"{category}：{_shorten(desc, 80)}",
+            "analysis": _shorten(basis if _meaningful_text(basis) else f"该问题涉及{category}，可能影响核查对试验质量、数据可靠性和合规性的判断。", 210),
             "advice": _risk_advice(category, full_text),
             "score": _risk_score(issue),
+            "source": "规则聚类兜底",
         })
     enriched.sort(key=lambda x: x["score"], reverse=True)
     return enriched[:5]
 
 
+def _get_top5_rows(context: dict) -> tuple[list[dict], str]:
+    if generate_ai_top5 is not None:
+        try:
+            ai_rows = generate_ai_top5(context)
+            if ai_rows:
+                rows = []
+                for item in ai_rows[:5]:
+                    rows.append({
+                        "risk": _clean(item.get("risk") or item.get("高风险问题") or item.get("title")),
+                        "analysis": _clean(item.get("analysis") or item.get("风险维度分析") or item.get("reason")),
+                        "advice": _clean(item.get("advice") or item.get("核查应对建议") or item.get("actions")),
+                        "source": _clean(item.get("source") or "AI智能总结（扣子）"),
+                    })
+                return rows, rows[0].get("source") or "AI智能总结（扣子）"
+        except Exception:
+            pass
+    rule_rows = _extract_top5_risks(context)
+    return rule_rows, "规则聚类兜底"
+
+
 def _render_risk_summary(slide, context):
     _clear_issue_content(slide)
-    risks = _extract_top5_risks(context)
-    _add_textbox(slide, 0.55, 0.38, 12.20, 0.48, "核查准备重点关注问题及迎检建议", 24, True, BLACK, PP_ALIGN.LEFT)
+    risks, source = _get_top5_rows(context)
+    _add_textbox(slide, 0.55, 0.32, 12.20, 0.48, "TOP5高风险问题及核查应对建议", 24, True, BLACK, PP_ALIGN.LEFT)
     if not risks:
         _add_textbox(slide, 0.75, 1.35, 11.80, 0.80, "本次上传文件中未识别到可用于提炼TOP5的问题内容，请复核Excel问题分类、问题描述和依据列是否完整。", 16, False, BLACK, PP_ALIGN.LEFT)
         return
 
-    shape = slide.shapes.add_table(6, 4, Inches(0.45), Inches(1.10), Inches(12.45), Inches(5.70))
+    shape = slide.shapes.add_table(6, 4, Inches(0.45), Inches(0.95), Inches(12.45), Inches(5.90))
     tbl = shape.table
-    widths = [0.55, 2.25, 4.45, 5.20]
+    widths = [0.60, 3.10, 4.20, 4.55]
     for i, w in enumerate(widths):
         tbl.columns[i].width = Inches(w)
-    tbl.rows[0].height = Inches(0.45)
+    tbl.rows[0].height = Inches(0.42)
     for r in range(1, 6):
-        tbl.rows[r].height = Inches(1.05)
-    headers = ["序号", "风险类别", "TOP高风险问题", "迎检建议"]
+        tbl.rows[r].height = Inches(1.10)
+    headers = ["排名", "高风险问题", "风险维度分析", "核查应对建议"]
     for c, h in enumerate(headers):
         _set_cell(tbl.cell(0, c), h, 12, True, PP_ALIGN.CENTER)
-        _set_cell_fill(tbl.cell(0, c), LIGHT_BLUE)
+        _set_cell_fill(tbl.cell(0, c), BLUE)
     for r in range(1, 6):
         if r <= len(risks):
             item = risks[r - 1]
-            values = [str(r), item["category"], f"{item['risk']}\n依据/风险逻辑：{item['reason']}", item["advice"]]
+            values = [str(r), item.get("risk", "—"), item.get("analysis", "—"), item.get("advice", "—")]
         else:
             values = [str(r), "—", "—", "—"]
         for c, v in enumerate(values):
-            size = 10 if c >= 2 else 11
+            size = 10 if c >= 1 else 11
             align = PP_ALIGN.CENTER if c == 0 else PP_ALIGN.LEFT
             _set_cell(tbl.cell(r, c), v, size, c == 0, align)
             if c == 0:
                 _set_cell_fill(tbl.cell(r, c), LIGHT_YELLOW)
-    _add_textbox(slide, 0.55, 6.92, 12.25, 0.25, "注：本页基于本次稽查发现自动提炼，用于核查准备优先级排序；正式迎检材料需结合项目医学判断及原始证据人工复核。", 9, False, GRAY, PP_ALIGN.LEFT)
+            elif r >= 1:
+                _set_cell_fill(tbl.cell(r, c), LIGHT_BLUE)
+    _add_textbox(slide, 0.55, 6.92, 12.25, 0.25, f"注：生成来源：{source}。正式材料需结合项目医学判断及原始证据人工复核。", 9, False, GRAY, PP_ALIGN.LEFT)
 
 
 def _copy_if_exists(prs, src_no):
