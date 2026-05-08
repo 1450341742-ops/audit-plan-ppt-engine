@@ -115,13 +115,15 @@ def _rule_top5(context: dict) -> list[dict]:
         risk = rule["risk"]
         if examples:
             risk += f"（涉及{item['count']}项发现，例：{examples}）"
-        result.append({"risk": risk, "analysis": rule["analysis"], "advice": rule["advice"], "score": item["score"]})
+        result.append({"risk": risk, "analysis": rule["analysis"], "advice": rule["advice"], "score": item["score"], "source": "规则聚类兜底"})
     return result
 
 
 def _patched_extract_top5_risks(context: dict) -> list[dict]:
     ai_rows = generate_ai_top5(context)
     if ai_rows:
+        for row in ai_rows:
+            row["source"] = row.get("source") or "AI智能总结"
         return ai_rows[:5]
     return _rule_top5(context)
 
@@ -160,7 +162,8 @@ def _patched_render_risk_summary(slide, context):
             align = PP_ALIGN.CENTER if c == 0 else PP_ALIGN.LEFT
             renderer._set_cell(tbl.cell(r, c), v, size, c == 0, align)
             renderer._set_cell_fill(tbl.cell(r, c), ROW_LIGHT_YELLOW if c == 0 else ROW_LIGHT_BLUE)
-    renderer._add_textbox(slide, 0.55, 7.05, 12.25, 0.16, "注：本页优先使用AI基于全部稽查发现提炼；未配置AI接口时自动使用风险主题聚类规则。正式材料需人工复核。", 8, False, renderer.GRAY, PP_ALIGN.LEFT)
+    source = risks[0].get("source", "未知") if risks else "未知"
+    renderer._add_textbox(slide, 0.55, 7.05, 12.25, 0.16, f"注：生成来源：{source}；正式材料需结合项目医学判断及原始证据人工复核。", 8, False, renderer.GRAY, PP_ALIGN.LEFT)
 
 
 renderer._render_risk_summary = _patched_render_risk_summary
@@ -171,7 +174,7 @@ def render_one(excel_path: str | Path, output_dir: str | Path | None = None, tem
     output_dir = Path(output_dir or DEFAULT_OUTPUT)
     output_dir.mkdir(parents=True, exist_ok=True)
     context = parse_excel(excel_path)
-    out = output_dir / f"{safe_stem(excel_path.stem)}-V8.8可选AI总结版.pptx"
+    out = output_dir / f"{safe_stem(excel_path.stem)}-V8.9来源标识版.pptx"
     renderer.render_ppt(context, out, template_path=Path(template_path or DEFAULT_TEMPLATE))
     return out
 
