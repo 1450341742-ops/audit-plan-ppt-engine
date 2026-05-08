@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -38,6 +39,7 @@ def _get_cfg(name: str, default: str = "") -> str:
         return str(value).strip()
     try:
         import streamlit as st
+
         if name in st.secrets:
             return str(st.secrets[name]).strip()
     except Exception:
@@ -59,53 +61,94 @@ def _compact_issues(context: dict, max_items: int = 80) -> str:
 
 
 def _normalize_rows(data: Any) -> list[dict]:
+    """把AI返回的多种字段格式统一为PPT可写入的TOP5结构。"""
+    if isinstance(data, dict):
+        for key in ("items", "top5", "data", "results", "list"):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+
     if not isinstance(data, list):
         return []
+
     rows = []
     for item in data[:5]:
         if not isinstance(item, dict):
             continue
-        risk = _clean(item.get("高风险问题") or item.get("risk") or item.get("问题") or item.get("title"))
-        analysis = _clean(item.get("风险维度分析") or item.get("analysis") or item.get("风险分析"))
-        advice = _clean(item.get("核查应对建议") or item.get("advice") or item.get("建议"))
+        risk = _clean(
+            item.get("高风险问题")
+            or item.get("risk")
+            or item.get("问题")
+            or item.get("title")
+            or item.get("name")
+        )
+        analysis = _clean(
+            item.get("风险维度分析")
+            or item.get("analysis")
+            or item.get("风险分析")
+            or item.get("reason")
+        )
+        advice = _clean(
+            item.get("核查应对建议")
+            or item.get("advice")
+            or item.get("建议")
+            or item.get("actions")
+        )
         if not risk or not analysis or not advice:
             continue
-        rows.append({"risk": risk[:120], "analysis": analysis[:260], "advice": advice[:320], "score": 999, "source": "AI智能总结"})
+        rows.append(
+            {
+                "risk": risk[:180],
+                "analysis": analysis[:360],
+                "advice": advice[:420],
+                "score": 999,
+                "source": "AI智能总结",
+            }
+        )
     return rows
 
 
-def _safe_parse_json(text: str) -> list[dict]:
+def _strip_code_fence(text: str) -> str:
     text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _safe_parse_json(text: str) -> list[dict]:
+    text = _strip_code_fence(text)
     if not text:
         _set_status("AI解析", False, "AI返回为空")
         return []
-    if text.startswith("```"):
-        text = text.strip("`")
-        text = text.replace("json\n", "", 1).strip()
+
+    # 1）优先直接解析完整JSON。
     try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            data = obj.get("items") or obj.get("top5") or obj.get("data") or obj.get("results") or obj.get("list") or []
-            if isinstance(data, list):
-                obj = data
-        rows = _normalize_rows(obj)
+        rows = _normalize_rows(json.loads(text))
         if rows:
             return rows
-        _set_status("AI解析", False, f"AI返回JSON但字段不匹配或条数不足，前200字：{text[:200]}")
-        return []
     except Exception:
-        start = text.find("[")
-        end = text.rfind("]")
-        if start >= 0 and end > start:
-            try:
-                rows = _normalize_rows(json.loads(text[start : end + 1]))
-                if rows:
-                    return rows
-            except Exception as e:
-                _set_status("AI解析", False, f"JSON数组截取解析失败：{e}")
-                return []
-        _set_status("AI解析", False, f"JSON解析失败，AI返回前200字：{text[:200]}")
-        return []
+        pass
+
+    # 2）兼容扣子/大模型偶尔在文本前后追加说明的情况，提取JSON数组或JSON对象。
+    candidates = []
+    arr_start, arr_end = text.find("["), text.rfind("]")
+    if arr_start >= 0 and arr_end > arr_start:
+        candidates.append(text[arr_start : arr_end + 1])
+    obj_start, obj_end = text.find("{"), text.rfind("}")
+    if obj_start >= 0 and obj_end > obj_start:
+        candidates.append(text[obj_start : obj_end + 1])
+
+    for candidate in candidates:
+        try:
+            rows = _normalize_rows(json.loads(candidate))
+            if rows:
+                return rows
+        except Exception:
+            continue
+
+    _set_status("AI解析", False, f"JSON解析失败或字段不匹配，AI返回前300字：{text[:300]}")
+    return []
 
 
 def _system_prompt() -> str:
@@ -138,7 +181,16 @@ def _extract_messages_data(raw: Any) -> list[dict]:
     return []
 
 
+def _coze_error_message(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return str(payload)[:500]
+    code = payload.get("code")
+    msg = payload.get("msg") or payload.get("message") or payload.get("error_message") or ""
+    return f"code={code}, msg={msg}, raw={json.dumps(payload, ensure_ascii=False)[:500]}"
+
+
 def _generate_with_coze(context: dict) -> list[dict]:
+    """调用扣子 v3 Chat：创建会话 -> 轮询状态 -> 获取answer消息 -> 解析TOP5。"""
     token = _get_cfg("COZE_API_KEY") or _get_cfg("COZE_TOKEN")
     bot_id = _get_cfg("COZE_BOT_ID")
     if not token or not bot_id:
@@ -153,70 +205,116 @@ def _generate_with_coze(context: dict) -> list[dict]:
 
     base_url = (_get_cfg("COZE_BASE_URL") or "https://api.coze.cn").rstrip("/")
     user_id = _get_cfg("COZE_USER_ID", "audit_ppt_user")
-    timeout_seconds = int(_get_cfg("COZE_TIMEOUT", "90"))
+    timeout_seconds = int(_get_cfg("COZE_TIMEOUT", "120"))
+    poll_interval = float(_get_cfg("COZE_POLL_INTERVAL", "1.5"))
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     content = _system_prompt() + "\n\n" + _user_prompt(context)
     payload = {
-        "bot_id": bot_id,
-        "user_id": user_id,
+        "bot_id": str(bot_id),
+        "user_id": str(user_id),
         "stream": False,
         "auto_save_history": False,
-        "additional_messages": [{"role": "user", "content_type": "text", "content": content}],
+        "additional_messages": [
+            {"role": "user", "content_type": "text", "content": content}
+        ],
     }
 
     try:
-        _set_status("扣子AI", False, f"开始调用：base_url={base_url}, bot_id尾号={bot_id[-6:]}")
-        resp = requests.post(f"{base_url}/v3/chat", headers=headers, json=payload, timeout=timeout_seconds)
-        if resp.status_code >= 400:
-            _set_status("扣子AI", False, f"/v3/chat失败：HTTP {resp.status_code}，{resp.text[:300]}")
+        _set_status("扣子AI", False, f"开始调用：base_url={base_url}, bot_id尾号={str(bot_id)[-6:]}")
+
+        create_resp = requests.post(f"{base_url}/v3/chat", headers=headers, json=payload, timeout=30)
+        if create_resp.status_code >= 400:
+            _set_status("扣子AI", False, f"/v3/chat失败：HTTP {create_resp.status_code}，{create_resp.text[:500]}")
             return []
-        data = resp.json()
-        chat_id = (data.get("data") or {}).get("id")
-        conversation_id = (data.get("data") or {}).get("conversation_id")
+
+        create_json = create_resp.json()
+        if create_json.get("code") not in (0, "0", None):
+            _set_status("扣子AI", False, f"/v3/chat业务失败：{_coze_error_message(create_json)}")
+            return []
+
+        chat_data = create_json.get("data") or {}
+        chat_id = chat_data.get("id") or chat_data.get("chat_id")
+        conversation_id = chat_data.get("conversation_id")
+
+        # 个别环境会直接同步返回answer，这里先尝试解析，避免漏掉。
+        direct_rows = _safe_parse_json(json.dumps(create_json, ensure_ascii=False))
+        if direct_rows:
+            _set_status("扣子AI", True, f"同步返回解析成功，返回{len(direct_rows)}条可用结果")
+            return direct_rows
+
         if not chat_id or not conversation_id:
-            _set_status("扣子AI", False, f"返回缺少chat_id/conversation_id：{json.dumps(data, ensure_ascii=False)[:300]}")
-            return _safe_parse_json(json.dumps(data, ensure_ascii=False))
+            _set_status("扣子AI", False, f"返回缺少chat_id/conversation_id：{json.dumps(create_json, ensure_ascii=False)[:500]}")
+            return []
 
         deadline = time.time() + timeout_seconds
         status = ""
+        retrieve_json: dict[str, Any] = {}
+
         while time.time() < deadline:
-            check = requests.get(
+            retrieve_resp = requests.get(
                 f"{base_url}/v3/chat/retrieve",
                 headers=headers,
-                params={"chat_id": chat_id, "conversation_id": conversation_id},
-                timeout=20,
+                params={"conversation_id": conversation_id, "chat_id": chat_id},
+                timeout=30,
             )
-            if check.status_code >= 400:
-                _set_status("扣子AI", False, f"retrieve失败：HTTP {check.status_code}，{check.text[:300]}")
+            if retrieve_resp.status_code >= 400:
+                _set_status("扣子AI", False, f"retrieve失败：HTTP {retrieve_resp.status_code}，{retrieve_resp.text[:500]}")
                 return []
-            status = (check.json().get("data") or {}).get("status", "")
-            if status in {"completed", "failed", "requires_action", "canceled"}:
+
+            retrieve_json = retrieve_resp.json()
+            if retrieve_json.get("code") not in (0, "0", None):
+                _set_status("扣子AI", False, f"retrieve业务失败：{_coze_error_message(retrieve_json)}")
+                return []
+
+            status = (retrieve_json.get("data") or {}).get("status", "")
+            if status == "completed":
                 break
-            time.sleep(1.2)
+            if status in {"failed", "requires_action", "canceled"}:
+                _set_status("扣子AI", False, f"运行未成功，status={status}，详情：{json.dumps(retrieve_json, ensure_ascii=False)[:500]}")
+                return []
+            time.sleep(poll_interval)
+
         if status != "completed":
-            _set_status("扣子AI", False, f"运行未完成或失败，status={status}")
+            _set_status("扣子AI", False, f"调用超时，最后状态status={status}，详情：{json.dumps(retrieve_json, ensure_ascii=False)[:500]}")
             return []
 
         msg_resp = requests.get(
             f"{base_url}/v3/chat/message/list",
             headers=headers,
-            params={"chat_id": chat_id, "conversation_id": conversation_id},
-            timeout=20,
+            params={"conversation_id": conversation_id, "chat_id": chat_id},
+            timeout=30,
         )
         if msg_resp.status_code >= 400:
-            _set_status("扣子AI", False, f"message/list失败：HTTP {msg_resp.status_code}，{msg_resp.text[:300]}")
+            _set_status("扣子AI", False, f"message/list失败：HTTP {msg_resp.status_code}，{msg_resp.text[:500]}")
             return []
+
         msg_json = msg_resp.json()
+        if msg_json.get("code") not in (0, "0", None):
+            _set_status("扣子AI", False, f"message/list业务失败：{_coze_error_message(msg_json)}")
+            return []
+
         messages = _extract_messages_data(msg_json)
+        candidate_texts: list[str] = []
         for msg in messages:
-            if msg.get("type") == "answer" and msg.get("content"):
-                rows = _safe_parse_json(msg.get("content", ""))
-                if rows:
-                    _set_status("扣子AI", True, f"调用成功，返回{len(rows)}条可用结果")
-                    return rows
-        _set_status("扣子AI", False, f"未找到可解析answer消息，返回前500字：{json.dumps(msg_json, ensure_ascii=False)[:500]}")
+            role = msg.get("role")
+            msg_type = msg.get("type")
+            content_text = msg.get("content") or ""
+            if not content_text:
+                continue
+            if role == "assistant" or msg_type in {"answer", "final_answer"}:
+                candidate_texts.append(content_text)
+
+        # 先从后往前解析，通常最后一条assistant/answer是最终答案。
+        for content_text in reversed(candidate_texts):
+            rows = _safe_parse_json(content_text)
+            if rows:
+                _set_status("扣子AI", True, f"调用成功，返回{len(rows)}条可用结果")
+                return rows
+
+        _set_status("扣子AI", False, f"已完成但未找到可解析answer，候选消息数={len(candidate_texts)}，返回前800字：{json.dumps(msg_json, ensure_ascii=False)[:800]}")
         return []
+
     except Exception as e:
         _set_status("扣子AI", False, f"调用异常：{type(e).__name__}: {e}")
         return []
@@ -244,7 +342,10 @@ def _generate_with_openai_compatible(context: dict) -> list[dict]:
     try:
         kwargs = {
             "model": model,
-            "messages": [{"role": "system", "content": _system_prompt()}, {"role": "user", "content": _user_prompt(context)}],
+            "messages": [
+                {"role": "system", "content": _system_prompt()},
+                {"role": "user", "content": _user_prompt(context)},
+            ],
             "temperature": 0.15,
         }
         if model.startswith("gpt-4"):
@@ -269,8 +370,10 @@ def generate_ai_top5(context: dict) -> list[dict]:
         for row in coze_rows:
             row["source"] = "AI智能总结（扣子）"
         return coze_rows
+
     rows = _generate_with_openai_compatible(context)
     if rows:
         return rows
+
     _set_status("AI总结", False, "AI总结未成功，已回退规则聚类")
     return []
