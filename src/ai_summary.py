@@ -39,7 +39,6 @@ def _get_cfg(name: str, default: str = "") -> str:
         return str(value).strip()
     try:
         import streamlit as st
-
         if name in st.secrets:
             return str(st.secrets[name]).strip()
     except Exception:
@@ -61,13 +60,11 @@ def _compact_issues(context: dict, max_items: int = 80) -> str:
 
 
 def _normalize_rows(data: Any) -> list[dict]:
-    """把AI返回的多种字段格式统一为PPT可写入的TOP5结构。"""
     if isinstance(data, dict):
         for key in ("items", "top5", "data", "results", "list"):
             if isinstance(data.get(key), list):
                 data = data[key]
                 break
-
     if not isinstance(data, list):
         return []
 
@@ -75,36 +72,12 @@ def _normalize_rows(data: Any) -> list[dict]:
     for item in data[:5]:
         if not isinstance(item, dict):
             continue
-        risk = _clean(
-            item.get("高风险问题")
-            or item.get("risk")
-            or item.get("问题")
-            or item.get("title")
-            or item.get("name")
-        )
-        analysis = _clean(
-            item.get("风险维度分析")
-            or item.get("analysis")
-            or item.get("风险分析")
-            or item.get("reason")
-        )
-        advice = _clean(
-            item.get("核查应对建议")
-            or item.get("advice")
-            or item.get("建议")
-            or item.get("actions")
-        )
+        risk = _clean(item.get("高风险问题") or item.get("risk") or item.get("问题") or item.get("title") or item.get("name"))
+        analysis = _clean(item.get("风险维度分析") or item.get("analysis") or item.get("风险分析") or item.get("reason"))
+        advice = _clean(item.get("核查应对建议") or item.get("advice") or item.get("建议") or item.get("actions"))
         if not risk or not analysis or not advice:
             continue
-        rows.append(
-            {
-                "risk": risk[:180],
-                "analysis": analysis[:360],
-                "advice": advice[:420],
-                "score": 999,
-                "source": "AI智能总结",
-            }
-        )
+        rows.append({"risk": risk[:180], "analysis": analysis[:360], "advice": advice[:420], "score": 999, "source": "AI智能总结"})
     return rows
 
 
@@ -116,13 +89,12 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
-def _safe_parse_json(text: str) -> list[dict]:
+def _safe_parse_json(text: str, update_status: bool = True) -> list[dict]:
     text = _strip_code_fence(text)
     if not text:
-        _set_status("AI解析", False, "AI返回为空")
+        if update_status:
+            _set_status("AI解析", False, "AI返回为空")
         return []
-
-    # 1）优先直接解析完整JSON。
     try:
         rows = _normalize_rows(json.loads(text))
         if rows:
@@ -130,7 +102,6 @@ def _safe_parse_json(text: str) -> list[dict]:
     except Exception:
         pass
 
-    # 2）兼容扣子/大模型偶尔在文本前后追加说明的情况，提取JSON数组或JSON对象。
     candidates = []
     arr_start, arr_end = text.find("["), text.rfind("]")
     if arr_start >= 0 and arr_end > arr_start:
@@ -147,7 +118,8 @@ def _safe_parse_json(text: str) -> list[dict]:
         except Exception:
             continue
 
-    _set_status("AI解析", False, f"JSON解析失败或字段不匹配，AI返回前300字：{text[:300]}")
+    if update_status:
+        _set_status("AI解析", False, f"JSON解析失败或字段不匹配，AI返回前300字：{text[:300]}")
     return []
 
 
@@ -183,14 +155,23 @@ def _extract_messages_data(raw: Any) -> list[dict]:
 
 def _coze_error_message(payload: Any) -> str:
     if not isinstance(payload, dict):
-        return str(payload)[:500]
+        return str(payload)[:800]
     code = payload.get("code")
     msg = payload.get("msg") or payload.get("message") or payload.get("error_message") or ""
-    return f"code={code}, msg={msg}, raw={json.dumps(payload, ensure_ascii=False)[:500]}"
+    return f"code={code}, msg={msg}, raw={json.dumps(payload, ensure_ascii=False)[:800]}"
+
+
+def _diagnostic_rows(reason: str) -> list[dict]:
+    return [{
+        "risk": "扣子AI未成功调用，已停止使用规则聚类兜底",
+        "analysis": reason[:360],
+        "advice": "请根据页面黄色提示或 Streamlit 日志定位：优先检查 COZE_API_KEY/COZE_TOKEN 是否为有效 Personal Access Token、COZE_BOT_ID 是否为完整Bot ID、Bot是否已发布、Token是否有该Bot访问权限、COZE_BASE_URL 是否为 https://api.coze.cn。",
+        "score": 0,
+        "source": "扣子AI调用失败（未使用规则兜底）",
+    }]
 
 
 def _generate_with_coze(context: dict) -> list[dict]:
-    """调用扣子 v3 Chat：创建会话 -> 轮询状态 -> 获取answer消息 -> 解析TOP5。"""
     token = _get_cfg("COZE_API_KEY") or _get_cfg("COZE_TOKEN")
     bot_id = _get_cfg("COZE_BOT_ID")
     if not token or not bot_id:
@@ -215,9 +196,7 @@ def _generate_with_coze(context: dict) -> list[dict]:
         "user_id": str(user_id),
         "stream": False,
         "auto_save_history": False,
-        "additional_messages": [
-            {"role": "user", "content_type": "text", "content": content}
-        ],
+        "additional_messages": [{"role": "user", "content_type": "text", "content": content}],
     }
 
     try:
@@ -225,7 +204,7 @@ def _generate_with_coze(context: dict) -> list[dict]:
 
         create_resp = requests.post(f"{base_url}/v3/chat", headers=headers, json=payload, timeout=30)
         if create_resp.status_code >= 400:
-            _set_status("扣子AI", False, f"/v3/chat失败：HTTP {create_resp.status_code}，{create_resp.text[:500]}")
+            _set_status("扣子AI", False, f"/v3/chat失败：HTTP {create_resp.status_code}，{create_resp.text[:800]}")
             return []
 
         create_json = create_resp.json()
@@ -237,20 +216,18 @@ def _generate_with_coze(context: dict) -> list[dict]:
         chat_id = chat_data.get("id") or chat_data.get("chat_id")
         conversation_id = chat_data.get("conversation_id")
 
-        # 个别环境会直接同步返回answer，这里先尝试解析，避免漏掉。
-        direct_rows = _safe_parse_json(json.dumps(create_json, ensure_ascii=False))
+        direct_rows = _safe_parse_json(json.dumps(create_json, ensure_ascii=False), update_status=False)
         if direct_rows:
             _set_status("扣子AI", True, f"同步返回解析成功，返回{len(direct_rows)}条可用结果")
             return direct_rows
 
         if not chat_id or not conversation_id:
-            _set_status("扣子AI", False, f"返回缺少chat_id/conversation_id：{json.dumps(create_json, ensure_ascii=False)[:500]}")
+            _set_status("扣子AI", False, f"返回缺少chat_id/conversation_id：{json.dumps(create_json, ensure_ascii=False)[:800]}")
             return []
 
         deadline = time.time() + timeout_seconds
         status = ""
         retrieve_json: dict[str, Any] = {}
-
         while time.time() < deadline:
             retrieve_resp = requests.get(
                 f"{base_url}/v3/chat/retrieve",
@@ -259,24 +236,22 @@ def _generate_with_coze(context: dict) -> list[dict]:
                 timeout=30,
             )
             if retrieve_resp.status_code >= 400:
-                _set_status("扣子AI", False, f"retrieve失败：HTTP {retrieve_resp.status_code}，{retrieve_resp.text[:500]}")
+                _set_status("扣子AI", False, f"retrieve失败：HTTP {retrieve_resp.status_code}，{retrieve_resp.text[:800]}")
                 return []
-
             retrieve_json = retrieve_resp.json()
             if retrieve_json.get("code") not in (0, "0", None):
                 _set_status("扣子AI", False, f"retrieve业务失败：{_coze_error_message(retrieve_json)}")
                 return []
-
             status = (retrieve_json.get("data") or {}).get("status", "")
             if status == "completed":
                 break
             if status in {"failed", "requires_action", "canceled"}:
-                _set_status("扣子AI", False, f"运行未成功，status={status}，详情：{json.dumps(retrieve_json, ensure_ascii=False)[:500]}")
+                _set_status("扣子AI", False, f"运行未成功，status={status}，详情：{json.dumps(retrieve_json, ensure_ascii=False)[:800]}")
                 return []
             time.sleep(poll_interval)
 
         if status != "completed":
-            _set_status("扣子AI", False, f"调用超时，最后状态status={status}，详情：{json.dumps(retrieve_json, ensure_ascii=False)[:500]}")
+            _set_status("扣子AI", False, f"调用超时，最后状态status={status}，详情：{json.dumps(retrieve_json, ensure_ascii=False)[:800]}")
             return []
 
         msg_resp = requests.get(
@@ -286,7 +261,7 @@ def _generate_with_coze(context: dict) -> list[dict]:
             timeout=30,
         )
         if msg_resp.status_code >= 400:
-            _set_status("扣子AI", False, f"message/list失败：HTTP {msg_resp.status_code}，{msg_resp.text[:500]}")
+            _set_status("扣子AI", False, f"message/list失败：HTTP {msg_resp.status_code}，{msg_resp.text[:800]}")
             return []
 
         msg_json = msg_resp.json()
@@ -300,12 +275,9 @@ def _generate_with_coze(context: dict) -> list[dict]:
             role = msg.get("role")
             msg_type = msg.get("type")
             content_text = msg.get("content") or ""
-            if not content_text:
-                continue
-            if role == "assistant" or msg_type in {"answer", "final_answer"}:
+            if content_text and (role == "assistant" or msg_type in {"answer", "final_answer"}):
                 candidate_texts.append(content_text)
 
-        # 先从后往前解析，通常最后一条assistant/answer是最终答案。
         for content_text in reversed(candidate_texts):
             rows = _safe_parse_json(content_text)
             if rows:
@@ -320,60 +292,14 @@ def _generate_with_coze(context: dict) -> list[dict]:
         return []
 
 
-def _get_ai_runtime() -> tuple[str, str, str]:
-    api_key = _get_cfg("DINGTALK_API_KEY") or _get_cfg("DEAP_API_KEY") or _get_cfg("OPENAI_API_KEY") or _get_cfg("AI_API_KEY")
-    base_url = _get_cfg("DINGTALK_BASE_URL") or _get_cfg("DEAP_BASE_URL") or _get_cfg("OPENAI_BASE_URL")
-    model = _get_cfg("DINGTALK_MODEL") or _get_cfg("DEAP_MODEL") or _get_cfg("OPENAI_MODEL") or "gpt-4o-mini"
-    return api_key, base_url, model
-
-
-def _generate_with_openai_compatible(context: dict) -> list[dict]:
-    api_key, base_url, model = _get_ai_runtime()
-    if not api_key:
-        _set_status("OpenAI兼容AI", False, "未调用：缺少API Key")
-        return []
-    try:
-        from openai import OpenAI
-    except Exception as e:
-        _set_status("OpenAI兼容AI", False, f"openai导入失败：{e}")
-        return []
-
-    client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
-    try:
-        kwargs = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": _system_prompt()},
-                {"role": "user", "content": _user_prompt(context)},
-            ],
-            "temperature": 0.15,
-        }
-        if model.startswith("gpt-4"):
-            kwargs["response_format"] = {"type": "json_object"}
-        _set_status("OpenAI兼容AI", False, f"开始调用：model={model}")
-        resp = client.chat.completions.create(**kwargs)
-        rows = _safe_parse_json(resp.choices[0].message.content or "")
-        if rows:
-            for row in rows:
-                row["source"] = "AI智能总结"
-            _set_status("OpenAI兼容AI", True, f"调用成功，返回{len(rows)}条可用结果")
-            return rows
-        return []
-    except Exception as e:
-        _set_status("OpenAI兼容AI", False, f"调用异常：{type(e).__name__}: {e}")
-        return []
-
-
 def generate_ai_top5(context: dict) -> list[dict]:
+    """强制使用扣子AI：成功则返回AI结果；失败则返回诊断行，绝不回退规则聚类。"""
     coze_rows = _generate_with_coze(context)
     if coze_rows:
         for row in coze_rows:
             row["source"] = "AI智能总结（扣子）"
         return coze_rows
 
-    rows = _generate_with_openai_compatible(context)
-    if rows:
-        return rows
-
-    _set_status("AI总结", False, "AI总结未成功，已回退规则聚类")
-    return []
+    reason = f"{LAST_AI_STATUS.get('source')}｜{LAST_AI_STATUS.get('message')}"
+    _set_status("扣子AI", False, f"扣子AI未成功调用，已禁止规则聚类兜底。真实原因：{reason}")
+    return _diagnostic_rows(reason)
