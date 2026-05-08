@@ -165,7 +165,7 @@ def _diagnostic_rows(reason: str) -> list[dict]:
     return [{
         "risk": "扣子AI未成功调用，已停止使用规则聚类兜底",
         "analysis": reason[:360],
-        "advice": "请根据页面黄色提示或 Streamlit 日志定位：优先检查 COZE_API_KEY/COZE_TOKEN 是否为有效 Personal Access Token、COZE_BOT_ID 是否为完整Bot ID、Bot是否已发布、Token是否有该Bot访问权限、COZE_BASE_URL 是否为 https://api.coze.cn。",
+        "advice": "请根据页面黄色提示或 Streamlit 日志定位：优先检查 COZE_API_KEY/COZE_TOKEN 是否为有效 Personal Access Token、COZE_BOT_ID 是否为完整Bot ID、Bot是否已发布到 API 渠道、Token是否有该Bot访问权限、COZE_BASE_URL 是否为 https://api.coze.cn。",
         "score": 0,
         "source": "扣子AI调用失败（未使用规则兜底）",
     }]
@@ -191,11 +191,13 @@ def _generate_with_coze(context: dict) -> list[dict]:
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     content = _system_prompt() + "\n\n" + _user_prompt(context)
+
+    # 扣子 v3/chat 在非流式场景下不要传 auto_save_history=false；否则部分账号会返回 4000。
+    # 保留 stream=false，让接口按异步非流式创建会话，再通过 retrieve + message/list 获取结果。
     payload = {
         "bot_id": str(bot_id),
         "user_id": str(user_id),
         "stream": False,
-        "auto_save_history": False,
         "additional_messages": [{"role": "user", "content_type": "text", "content": content}],
     }
 
