@@ -5,7 +5,7 @@ import traceback
 from pathlib import Path
 import streamlit as st
 from batch_generate import render_one
-from ai_summary import _get_cfg
+from ai_summary import _get_cfg, get_last_ai_status
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = BASE_DIR / "output"
@@ -14,8 +14,8 @@ TEMPLATE_PATH = ASSETS_DIR / "template.pptx"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-st.set_page_config(page_title="稽查总结会PPT生成器 V8.10", layout="centered")
-st.title("稽查总结会PPT生成器 V8.10（内置模板版）")
+st.set_page_config(page_title="稽查总结会PPT生成器 V8.11", layout="centered")
+st.title("稽查总结会PPT生成器 V8.11（内置模板版）")
 st.caption("系统已内置稽查总结会PPT模板，只需上传Excel表格即可生成PPT。TOP5页优先调用AI总结；AI未配置或调用失败时自动使用规则聚类兜底。")
 
 repo_template_ok = TEMPLATE_PATH.exists() and TEMPLATE_PATH.stat().st_size > 1024 * 100
@@ -81,6 +81,11 @@ if st.button("开始生成", type="primary"):
             except Exception as e:
                 st.error(f"{f.name} 生成失败：{e}")
                 st.code(traceback.format_exc(), language="python")
+        status = get_last_ai_status()
+        if status.get("ok"):
+            st.success(f"AI调用成功：{status.get('source')}｜{status.get('message')}")
+        else:
+            st.warning(f"AI未成功使用：{status.get('source')}｜{status.get('message')}")
         if outs:
             st.success("生成完成。请打开PPT的TOP5页底部查看生成来源。")
             for idx, p in enumerate(outs):
