@@ -14,8 +14,8 @@ TEMPLATE_PATH = ASSETS_DIR / "template.pptx"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-st.set_page_config(page_title="稽查总结会PPT生成器 V8.11", layout="centered")
-st.title("稽查总结会PPT生成器 V8.11（内置模板版）")
+st.set_page_config(page_title="稽查总结会PPT生成器 V8.12", layout="centered")
+st.title("稽查总结会PPT生成器 V8.12（内置模板版）")
 st.caption("系统已内置稽查总结会PPT模板，只需上传Excel表格即可生成PPT。TOP5页优先调用AI总结；AI未配置或调用失败时自动使用规则聚类兜底。")
 
 repo_template_ok = TEMPLATE_PATH.exists() and TEMPLATE_PATH.stat().st_size > 1024 * 100
@@ -50,7 +50,7 @@ with st.expander("AI配置状态", expanded=True):
             ```
             """
         )
-    st.info("生成PPT后，请查看TOP5页底部：显示“AI智能总结（扣子）”才代表真正使用了扣子AI；显示“规则聚类兜底”则代表AI未成功调用。")
+    st.info("生成PPT后，TOP5页只展示高风险问题、风险维度分析和核查应对建议，不再显示生成来源说明。")
 
 uploads = st.file_uploader("上传Excel文件", type=["xlsx", "xlsm", "xls"], accept_multiple_files=True)
 
@@ -87,7 +87,7 @@ if st.button("开始生成", type="primary"):
         else:
             st.warning(f"AI未成功使用：{status.get('source')}｜{status.get('message')}")
         if outs:
-            st.success("生成完成。请打开PPT的TOP5页底部查看生成来源。")
+            st.success("生成完成。请下载PPT查看TOP5页内容。")
             for idx, p in enumerate(outs):
                 with open(p, "rb") as fp:
                     st.download_button(
