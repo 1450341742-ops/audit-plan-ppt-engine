@@ -35,6 +35,14 @@ def safe_stem(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]+', '_', name).strip().strip('.') or 'output'
 
 
+def build_output_name(context: dict, fallback_stem: str) -> str:
+    """Use the first-slide project title naming rule: 项目名称+中心稽查末次会议."""
+    meta = context.get("meta", {}) if isinstance(context, dict) else {}
+    project_name = renderer._clean(meta.get("project_name", ""))
+    base_name = f"{project_name}中心稽查末次会议" if project_name else f"{fallback_stem}中心稽查末次会议"
+    return f"{safe_stem(base_name)}.pptx"
+
+
 def _patched_render_cover(slide, context):
     renderer._remove_text_shapes(slide)
     meta = context.get("meta", {})
@@ -100,7 +108,7 @@ def render_one(excel_path: str | Path, output_dir: str | Path | None = None, tem
     output_dir = Path(output_dir or DEFAULT_OUTPUT)
     output_dir.mkdir(parents=True, exist_ok=True)
     context = parse_excel(excel_path)
-    out = output_dir / f"{safe_stem(excel_path.stem)}-V8.12无来源标识版.pptx"
+    out = output_dir / build_output_name(context, safe_stem(excel_path.stem))
     renderer.render_ppt(context, out, template_path=Path(template_path or DEFAULT_TEMPLATE))
     return out
 
