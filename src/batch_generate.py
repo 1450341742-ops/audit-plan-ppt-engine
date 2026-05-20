@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import hashlib
 import re
 from pathlib import Path
 
@@ -31,8 +32,39 @@ def _set_cell_font_color(cell, color: RGBColor):
         pass
 
 
-def safe_stem(name: str) -> str:
-    return re.sub(r'[<>:"/\\|?*]+', '_', name).strip().strip('.') or 'output'
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Truncate text without splitting UTF-8 characters."""
+    result = ""
+    used = 0
+    for ch in text:
+        ch_len = len(ch.encode("utf-8"))
+        if used + ch_len > max_bytes:
+            break
+        result += ch
+        used += ch_len
+    return result
+
+
+def safe_stem(name: str, max_bytes: int = 110) -> str:
+    """
+    Return a cross-platform safe file stem.
+
+    Linux/Streamlit limits a single file name component to about 255 bytes.
+    Chinese project names can exceed that even when the visible length looks acceptable,
+    so this keeps the stem short by UTF-8 byte length and adds a hash when truncated.
+    """
+    raw = str(name or "output")
+    cleaned = re.sub(r'[<>:"/\\|?*\r\n\t]+', '_', raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().strip(' ._') or 'output'
+
+    if len(cleaned.encode("utf-8")) <= max_bytes:
+        return cleaned
+
+    digest = hashlib.md5(cleaned.encode("utf-8")).hexdigest()[:8]
+    suffix = f"_{digest}"
+    keep_bytes = max(20, max_bytes - len(suffix.encode("utf-8")))
+    shortened = _truncate_utf8(cleaned, keep_bytes).strip().strip(' ._') or 'output'
+    return f"{shortened}{suffix}"
 
 
 def build_output_name(context: dict, fallback_stem: str) -> str:
@@ -40,7 +72,7 @@ def build_output_name(context: dict, fallback_stem: str) -> str:
     meta = context.get("meta", {}) if isinstance(context, dict) else {}
     project_name = renderer._clean(meta.get("project_name", ""))
     base_name = f"{project_name}中心稽查末次会议" if project_name else f"{fallback_stem}中心稽查末次会议"
-    return f"{safe_stem(base_name)}.pptx"
+    return f"{safe_stem(base_name, max_bytes=110)}.pptx"
 
 
 def _patched_render_cover(slide, context):
