@@ -75,6 +75,29 @@ def build_output_name(context: dict, fallback_stem: str) -> str:
     return f"{safe_stem(base_name, max_bytes=110)}.pptx"
 
 
+def apply_excel_category_order(context: dict) -> dict:
+    """Render issue detail slides in the same category order as the Excel issue table.
+
+    The counts slide can still use the fixed template layout, but issue detail pages should
+    follow the uploaded table's first-appearance order. Example: if the first issue category
+    in Excel is 药物疗效/研究评价指标的评估, that category's pages appear before 其他.
+    """
+    if not isinstance(context, dict):
+        return context
+    ordered = []
+    for issue in context.get("issues", []) or []:
+        cat = renderer._clean(issue.get("category", ""))
+        if cat and cat not in ordered:
+            ordered.append(cat)
+    for cat in context.get("standard_categories", []) or []:
+        cat = renderer._clean(cat)
+        if cat and cat not in ordered:
+            ordered.append(cat)
+    if ordered:
+        context["standard_categories"] = ordered
+    return context
+
+
 def _patched_render_cover(slide, context):
     renderer._remove_text_shapes(slide)
     meta = context.get("meta", {})
@@ -139,7 +162,7 @@ def render_one(excel_path: str | Path, output_dir: str | Path | None = None, tem
     excel_path = Path(excel_path)
     output_dir = Path(output_dir or DEFAULT_OUTPUT)
     output_dir.mkdir(parents=True, exist_ok=True)
-    context = parse_excel(excel_path)
+    context = apply_excel_category_order(parse_excel(excel_path))
     out = output_dir / build_output_name(context, safe_stem(excel_path.stem))
     renderer.render_ppt(context, out, template_path=Path(template_path or DEFAULT_TEMPLATE))
     return out
