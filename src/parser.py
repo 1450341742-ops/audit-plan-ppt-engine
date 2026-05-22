@@ -17,15 +17,20 @@ def norm(s:str)->str:
     s=clean_text(s).lower().replace("（","(").replace("）",")").replace("，","、").replace(",","、")
     return re.sub(r"\s+","",s)
 def looks_like_protocol_compliance(nr:str)->bool:
-    return bool(nr) and (("方案" in nr and any(k in nr for k in ["依从","遵循","执行","偏离"])) or ("protocol" in nr and any(k in nr for k in ["compliance","adherence","deviation"])))
+    return bool(nr) and (("方案" in nr and any(k in nr for k in ["依从","遵循","执行","偏离","违背","违反"])) or ("protocol" in nr and any(k in nr for k in ["compliance","adherence","deviation","violation"])))
 def normalize_category(raw:str)->str:
     nr=norm(raw)
     if not nr: return "其他"
-    for c in STANDARD_CATEGORIES:
-        if norm(c)==nr or norm(c) in nr or nr in norm(c): return c
-    for k,v in ALIASES.items():
-        if norm(k) in nr: return v
+    if nr==norm("其他"): return "其他"
     if looks_like_protocol_compliance(nr): return "方案依从性"
+    for k,v in ALIASES.items():
+        nk=norm(k)
+        if nk and nk!="其他" and nk in nr: return v
+    for c in STANDARD_CATEGORIES:
+        nc=norm(c)
+        if c=="其他":
+            continue
+        if nc==nr or nc in nr or nr in nc: return c
     return "其他"
 def rows_from_ws(ws): return [[clean_text(c) for c in row] for row in ws.iter_rows(values_only=True)]
 def row_text(row): return " ".join(x for x in row if x)
