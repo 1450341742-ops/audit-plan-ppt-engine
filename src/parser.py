@@ -5,7 +5,7 @@ from typing import Any
 import openpyxl
 
 STANDARD_CATEGORIES = ["国家药物临床试验政策法规的遵循","伦理委员会审核要求的遵循","知情同意书（ICF）的签署和记录","原始文件的建立、内容和记录","门诊/住院HIS、LIS、PACS等系统数据溯源","方案依从性","药物疗效/研究评价指标的评估","安全性信息评估，记录与报告","CRF填写（时效性、一致性、溯源性、完整性）","试验用药品管理","生物样本管理","临床研究必须文件","申办方/CRO职责","其他"]
-ALIASES={"法规":"国家药物临床试验政策法规的遵循","伦理":"伦理委员会审核要求的遵循","知情同意":"知情同意书（ICF）的签署和记录","icf":"知情同意书（ICF）的签署和记录","源文件":"原始文件的建立、内容和记录","原始文件":"原始文件的建立、内容和记录","原始记录":"原始文件的建立、内容和记录","his":"门诊/住院HIS、LIS、PACS等系统数据溯源","lis":"门诊/住院HIS、LIS、PACS等系统数据溯源","pacs":"门诊/住院HIS、LIS、PACS等系统数据溯源","方案依从":"方案依从性","方案偏离":"方案依从性","疗效":"药物疗效/研究评价指标的评估","recist":"药物疗效/研究评价指标的评估","肿瘤评估":"药物疗效/研究评价指标的评估","安全性":"安全性信息评估，记录与报告","ae":"安全性信息评估，记录与报告","sae":"安全性信息评估，记录与报告","crf":"CRF填写（时效性、一致性、溯源性、完整性）","edc":"CRF填写（时效性、一致性、溯源性、完整性）","药品":"试验用药品管理","药物":"试验用药品管理","样本":"生物样本管理","必须文件":"临床研究必须文件","研究者文件夹":"临床研究必须文件","cro":"申办方/CRO职责","申办方":"申办方/CRO职责","其他":"其他"}
+ALIASES={"法规":"国家药物临床试验政策法规的遵循","伦理":"伦理委员会审核要求的遵循","知情同意":"知情同意书（ICF）的签署和记录","icf":"知情同意书（ICF）的签署和记录","源文件":"原始文件的建立、内容和记录","原始文件":"原始文件的建立、内容和记录","原始记录":"原始文件的建立、内容和记录","his":"门诊/住院HIS、LIS、PACS等系统数据溯源","lis":"门诊/住院HIS、LIS、PACS等系统数据溯源","pacs":"门诊/住院HIS、LIS、PACS等系统数据溯源","方案依从":"方案依从性","方案依从性":"方案依从性","方案及其他文件依从性":"方案依从性","方案和其他文件依从性":"方案依从性","方案/其他文件依从性":"方案依从性","方案及文件依从性":"方案依从性","方案及其它文件依从性":"方案依从性","方案及其他文件的依从性":"方案依从性","方案与其他文件依从性":"方案依从性","方案及其他文件遵循":"方案依从性","方案和其他文件遵循":"方案依从性","方案文件依从":"方案依从性","方案文件遵循":"方案依从性","方案执行":"方案依从性","方案遵循":"方案依从性","方案偏离":"方案依从性","protocol compliance":"方案依从性","protocol adherence":"方案依从性","protocol deviation":"方案依从性","疗效":"药物疗效/研究评价指标的评估","recist":"药物疗效/研究评价指标的评估","肿瘤评估":"药物疗效/研究评价指标的评估","安全性":"安全性信息评估，记录与报告","ae":"安全性信息评估，记录与报告","sae":"安全性信息评估，记录与报告","crf":"CRF填写（时效性、一致性、溯源性、完整性）","edc":"CRF填写（时效性、一致性、溯源性、完整性）","药品":"试验用药品管理","药物":"试验用药品管理","样本":"生物样本管理","必须文件":"临床研究必须文件","研究者文件夹":"临床研究必须文件","cro":"申办方/CRO职责","申办方":"申办方/CRO职责","其他":"其他"}
 STOP_WORDS=["审核","回复","签字","日期","备注","说明","填表","批准","确认"]
 
 def clean_text(v:Any)->str:
@@ -16,6 +16,8 @@ def clean_text(v:Any)->str:
 def norm(s:str)->str:
     s=clean_text(s).lower().replace("（","(").replace("）",")").replace("，","、").replace(",","、")
     return re.sub(r"\s+","",s)
+def looks_like_protocol_compliance(nr:str)->bool:
+    return bool(nr) and (("方案" in nr and any(k in nr for k in ["依从","遵循","执行","偏离"])) or ("protocol" in nr and any(k in nr for k in ["compliance","adherence","deviation"])))
 def normalize_category(raw:str)->str:
     nr=norm(raw)
     if not nr: return "其他"
@@ -23,6 +25,7 @@ def normalize_category(raw:str)->str:
         if norm(c)==nr or norm(c) in nr or nr in norm(c): return c
     for k,v in ALIASES.items():
         if norm(k) in nr: return v
+    if looks_like_protocol_compliance(nr): return "方案依从性"
     return "其他"
 def rows_from_ws(ws): return [[clean_text(c) for c in row] for row in ws.iter_rows(values_only=True)]
 def row_text(row): return " ".join(x for x in row if x)
