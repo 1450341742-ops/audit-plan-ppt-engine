@@ -10,7 +10,6 @@ from pptx.util import Inches
 
 from parser import parse_excel
 import renderer
-from ai_summary import generate_ai_top5
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = BASE_DIR / "output"
@@ -116,9 +115,7 @@ renderer._render_cover = _patched_render_cover
 
 
 def _patched_extract_top5_risks(context: dict) -> list[dict]:
-    ai_rows = generate_ai_top5(context)
-    if ai_rows:
-        return ai_rows[:5]
+    """Build TOP5 directly from parsed Excel content using renderer rules, without AI."""
     return renderer._extract_top5_risks(context)
 
 
